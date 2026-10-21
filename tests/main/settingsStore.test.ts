@@ -7,6 +7,16 @@ import { DEFAULT_SETTINGS, type Settings } from '../../src/shared/settings';
 
 const tempDir = () => mkdtempSync(join(tmpdir(), 'lolping-'));
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Waits for a condition instead of guessing how long a write takes: a loaded machine makes any guess wrong. */
+const waitFor = async (done: () => boolean, ms = 3000): Promise<void> => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (done()) return;
+    await sleep(10);
+  }
+  throw new Error('timed out waiting for the file to be written');
+};
 /** Waits for the save load() scheduled on its own to reach disk: a fixed sleep raced slow CI runners. */
 const savedTagColor = (dir: string, color: number) =>
   vi.waitFor(() => expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).tagColor).toBe(color), { timeout: 3000 });
@@ -90,8 +100,15 @@ describe('SettingsStore', () => {
     const dir = tempDir();
     writeFileSync(join(dir, 'settings.json'), JSON.stringify({ version: 1, volume: 30 }));
     new SettingsStore(dir, 10).load();
-    await sleep(80);
-    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8'))).toMatchObject({ emoteTrigger: 'ctrl', emoteSizePx: 150, customEmotes: [] });
+    const saved = (): Record<string, unknown> => {
+      try {
+        return JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as Record<string, unknown>;
+      } catch {
+        return {};
+      }
+    };
+    await waitFor(() => saved().emoteTrigger === 'ctrl');
+    expect(saved()).toMatchObject({ emoteTrigger: 'ctrl', emoteSizePx: 150, customEmotes: [] });
   });
 
   it('emits change with the normalized value', () => {

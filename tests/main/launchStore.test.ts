@@ -8,6 +8,16 @@ const tempDir = (): string => mkdtempSync(join(tmpdir(), 'lolping-launch-'));
 
 const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** Waits for the file to land instead of guessing how long a debounced write takes on a loaded machine. */
+const waitFor = async (done: () => boolean, ms = 3000): Promise<void> => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if (done()) return;
+    await wait(10);
+  }
+  throw new Error('timed out waiting for launch.json');
+};
+
 describe('LaunchStore', () => {
   it('starts with one empty plan when there is no file', () => {
     const dir = tempDir();
@@ -83,7 +93,7 @@ describe('LaunchStore', () => {
     store.set({ plans: [{ id: 'two', items: [{ id: 'b', type: 'app', target: 'C:\\two.exe' }] }] });
     await wait(20);
     expect(existsSync(join(dir, 'launch.json'))).toBe(false);
-    await wait(150);
+    await waitFor(() => existsSync(join(dir, 'launch.json')));
     const saved: unknown = JSON.parse(readFileSync(join(dir, 'launch.json'), 'utf8'));
     expect(saved).toMatchObject({ requestGather: { plans: [{ id: 'two', items: [{ id: 'b' }] }] } });
   });
