@@ -39,6 +39,23 @@ describe('checkLaunchDraft', () => {
       .toEqual([{ field: 'target', reason: 'missing' }, { field: 'program', reason: 'missing' }]);
   });
 
+  it('asks for a command when a VS Code project has none', () => {
+    const exists = only('D:\\code\\p');
+    expect(checkLaunchDraft({ type: 'vscode', target: 'D:\\code\\p', command: 'npm run dev' }, exists)).toEqual([]);
+    expect(checkLaunchDraft({ type: 'vscode', target: 'D:\\code\\p', command: '  ' }, exists))
+      .toEqual([{ field: 'command', reason: 'empty' }]);
+  });
+
+  it('checks the working directory when one is typed, and only then', () => {
+    const exists = only('D:\\code\\p', 'C:\\Code.exe', 'D:\\other');
+    const base = { type: 'folder', target: 'D:\\code\\p', openMode: 'program', program: 'C:\\Code.exe' };
+    expect(checkLaunchDraft({ ...base, cwd: '' }, exists)).toEqual([]);
+    expect(checkLaunchDraft({ ...base, cwd: 'D:\\other' }, exists)).toEqual([]);
+    expect(checkLaunchDraft({ ...base, cwd: 'D:\\gone' }, exists)).toEqual([{ field: 'cwd', reason: 'missing' }]);
+    // A system-default open has no program, so no working directory either.
+    expect(checkLaunchDraft({ type: 'folder', target: 'D:\\code\\p', openMode: 'default', cwd: 'D:\\gone' }, exists)).toEqual([]);
+  });
+
   it('ignores a program for a URL or an app, which have no "open with"', () => {
     expect(checkLaunchDraft({ type: 'url', target: 'https://x.dev', openMode: 'program', program: 'C:\\gone.exe' }, only())).toEqual([]);
     expect(checkLaunchDraft({ type: 'app', target: 'C:\\a.exe', openMode: 'program', program: 'C:\\gone.exe' }, only('C:\\a.exe')))

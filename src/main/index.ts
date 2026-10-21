@@ -31,7 +31,7 @@ import { isFile } from './fileState';
 import { InputBridge } from './inputBridge';
 import { LanTransport } from './lanTransport';
 import { runLaunchItems } from './launcher';
-import { systemLauncher } from './launcherHost';
+import { makeSystemLauncher } from './launcherHost';
 import { LaunchStore } from './launchStore';
 import { RELAYS } from './relays';
 import { RelayTransport } from './relayTransport';
@@ -118,6 +118,8 @@ function start(): void {
   // The request gather workspace lives beside the settings, in its own file: it is a list, not a setting.
   const launch = new LaunchStore(settingsDir());
   launch.load();
+  // Generated VS Code workspace files live under the settings too, never inside the project they open.
+  const launcher = makeSystemLauncher(join(settingsDir(), 'workspaces'));
   let settings = store.load();
   // An imported emote whose still is gone is dropped; normalising the shorter list repairs the wheel slots that used it.
   const kept = library.present(settings.customEmotes);
@@ -403,7 +405,7 @@ function start(): void {
     launching = true;
     overlays.toast(t.launchStartingTitle(namesForToast(items)), '');
     try {
-      const report = await runLaunchItems(items, systemLauncher);
+      const report = await runLaunchItems(items, launcher);
       if (quitting) return;
       if (report.failed.length === 0) {
         overlays.toast(t.launchDoneTitle(report.opened.length), '');

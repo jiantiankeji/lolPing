@@ -24,6 +24,8 @@ export function checkLaunchDraft(raw: unknown, exists: (path: string) => boolean
   const target = typeof d.target === 'string' ? d.target.trim() : '';
   const openMode: LaunchOpenMode = d.openMode === 'program' && (type === 'file' || type === 'folder') ? 'program' : 'default';
   const program = typeof d.program === 'string' ? d.program.trim() : '';
+  const cwd = typeof d.cwd === 'string' ? d.cwd.trim() : '';
+  const command = typeof d.command === 'string' ? d.command.trim() : '';
   const problems: LaunchProblem[] = [];
   if (target === '') problems.push({ field: 'target', reason: 'empty' });
   else if (type === 'url') {
@@ -34,6 +36,9 @@ export function checkLaunchDraft(raw: unknown, exists: (path: string) => boolean
   if (openMode === 'program') {
     if (program === '') problems.push({ field: 'program', reason: 'empty' });
     else if (!exists(program)) problems.push({ field: 'program', reason: 'missing' });
+    // A working directory is optional, but a typed one has to be there.
+    if (cwd !== '' && !exists(cwd)) problems.push({ field: 'cwd', reason: 'missing' });
   }
+  if (type === 'vscode' && command === '') problems.push({ field: 'command', reason: 'empty' });
   return problems;
 }

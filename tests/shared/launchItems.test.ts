@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import {
   LAUNCH_CONFIG_VERSION, MAX_LAUNCH_ITEMS, MAX_LAUNCH_PLANS, activePlan, fillArgs, isWebUrl, launchFailureText,
-  launchProblemText, launchableItems, namesForToast, normalizeLaunchConfig, suggestName,
+  launchProblemText, launchableItems, namesForToast, normalizeLaunchConfig, resolvedCwd, suggestName,
   type LaunchItem, type LaunchPlan,
 } from '../../src/shared/launchItems';
 import { strings } from '../../src/shared/i18n';
 
 const item = (over: Partial<LaunchItem> = {}): LaunchItem => ({
-  id: 'a', name: 'A', type: 'app', target: 'C:\\Code.exe', openMode: 'default', program: '', args: [],
-  enabled: true, checked: true, order: 0, ...over,
+  id: 'a', name: 'A', type: 'app', target: 'C:\\Code.exe', openMode: 'default', program: '', args: [], cwd: '',
+  command: '', enabled: true, checked: true, order: 0, ...over,
 });
 
 const plan = (items: LaunchItem[], over: Partial<LaunchPlan> = {}): LaunchPlan => ({ id: 'p1', name: '', items, ...over });
@@ -135,6 +135,28 @@ describe('launchItems', () => {
     expect(fillArgs({ openMode: 'program', args: ['-n', '{path}'], target: 'D:\\p' })).toEqual(['-n', 'D:\\p']);
     expect(fillArgs({ openMode: 'program', args: ['{path}/{path}'], target: 'D:\\p' })).toEqual(['D:\\p/D:\\p']);
     expect(fillArgs({ openMode: 'program', args: [], target: 'D:\\p' })).toEqual(['D:\\p']);
+  });
+
+  it('runs a program in its own working directory, else in the folder it opens', () => {
+    // A working directory wins: that is what lets `cmd.exe /c npm run dev` find the project.
+    expect(resolvedCwd({ openMode: 'program', type: 'folder', target: 'D:\\code\\p', cwd: 'D:\\code\\x' })).toBe('D:\\code\\x');
+    expect(resolvedCwd({ openMode: 'program', type: 'folder', target: 'D:\\code\\p', cwd: '' })).toBe('D:\\code\\p');
+    // A file is not a folder to run in, and a system-default open has no program to place.
+    expect(resolvedCwd({ openMode: 'program', type: 'file', target: 'D:\\notes\\day1.md', cwd: '' })).toBeNull();
+    expect(resolvedCwd({ openMode: 'default', type: 'folder', target: 'D:\\code\\p', cwd: 'D:\\code\\x' })).toBeNull();
+  });
+
+  it('keeps a VS Code project’s command and executable, and drops what does not belong to it', () => {
+    const [entry] = normalizeLaunchConfig({
+      plans: [{ items: [{
+        id: 'dev', name: 'lolPing', type: 'vscode', target: 'D:\\code\\p', command: '  npm run dev  ',
+        program: 'C:\\VS Code\\Code.exe', openMode: 'program', args: ['-n'], cwd: 'D:\\x',
+      }] }],
+    }).plans[0].items;
+    expect(entry).toMatchObject({
+      type: 'vscode', target: 'D:\\code\\p', command: 'npm run dev', program: 'C:\\VS Code\\Code.exe',
+      openMode: 'default', args: [], cwd: '',
+    });
   });
 
   it('accepts only http and https links', () => {

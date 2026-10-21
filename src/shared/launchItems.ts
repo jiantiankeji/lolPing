@@ -3,13 +3,21 @@ import { sanitizeName } from './roomProtocol';
 import type { Strings } from './i18n';
 
 /** What the request gather ping can open. */
-export type LaunchType = 'url' | 'app' | 'file' | 'folder';
+/**
+ * What the request gather ping can open. `vscode` is a project folder opened as a VS Code workspace whose task runs the
+ * command on open, which is the only way VS Code can start a project by itself.
+ */
+export type LaunchType = 'url' | 'app' | 'file' | 'folder' | 'vscode';
 /** How it is opened: by the OS's own association, or by a program of the user's choosing. */
 export type LaunchOpenMode = 'default' | 'program';
 export type LaunchPickKind = 'file' | 'folder' | 'program';
 
-export const LAUNCH_TYPES: readonly LaunchType[] = ['url', 'app', 'file', 'folder'];
+export const LAUNCH_TYPES: readonly LaunchType[] = ['url', 'app', 'file', 'folder', 'vscode'];
 export const LAUNCH_OPEN_MODES: readonly LaunchOpenMode[] = ['default', 'program'];
+
+/** What a VS Code project runs when it opens, unless the entry says otherwise. */
+export const DEFAULT_VSCODE_COMMAND = 'npm run dev';
+export const MAX_LAUNCH_COMMAND = 512;
 
 /** One thing the request gather ping opens. Names follow the JSON the settings window writes. */
 export interface LaunchItem {
@@ -23,6 +31,13 @@ export interface LaunchItem {
   program: string;
   /** Only for openMode 'program': arguments, `{path}` standing for the target. */
   args: string[];
+  /**
+   * Only for openMode 'program': the directory the program runs in. Empty means the target itself when it is a folder,
+   * and lolPing's own directory otherwise — which is why a command like `npm run dev` needs it.
+   */
+  cwd: string;
+  /** Only for type 'vscode': the command its workspace task runs when the project opens. */
+  command: string;
   enabled: boolean;
   checked: boolean;
   order: number;
@@ -92,12 +107,24 @@ export function fillArgs(item: Pick<LaunchItem, 'openMode' | 'args' | 'target'>)
   return args.length > 0 ? args : [item.target];
 }
 
+/**
+ * The directory a program runs in: the entry's own working directory, or the target itself while that is a folder, or
+ * null to leave it to lolPing. A command such as `npm run dev` only works with one of the first two.
+ */
+export function resolvedCwd(item: Pick<LaunchItem, 'openMode' | 'cwd' | 'target' | 'type'>): string | null {
+  if (item.openMode !== 'program') return null;
+  if (item.cwd !== '') return item.cwd;
+  return item.type === 'folder' ? item.target : null;
+}
+
 /** What the form sends before anything is saved, for the check. */
 export interface LaunchDraft {
   type: LaunchType;
   target: string;
   openMode: LaunchOpenMode;
   program: string;
+  cwd: string;
+  command: string;
 }
 
 /** One stored entry, or null when it cannot be used. Fields are rebuilt, never trusted. */
@@ -112,11 +139,18 @@ function normalizeItem(raw: unknown, index: number): LaunchItem | null {
     ? 'program' : 'default';
   const id = typeof raw.id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.id) ? raw.id : `item-${index + 1}`;
   const rawArgs = Array.isArray(raw.args) ? raw.args : [];
-  const args = rawArgs
+  // A VS Code project runs its command through the workspace task: it takes no arguments of its own.
+  const args = type === 'vscode' ? [] : rawArgs
     .filter((a): a is string => typeof a === 'string' && a.length <= MAX_LAUNCH_ARG)
     .slice(0, MAX_LAUNCH_ARGS);
   const program = openMode === 'program' ? (nonEmptyString(raw.program, MAX_LAUNCH_TARGET) ?? '') : '';
+  const cwd = openMode === 'program' ? (nonEmptyString(raw.cwd, MAX_LAUNCH_TARGET) ?? '') : '';
   const order = typeof raw.order === 'number' && Number.isFinite(raw.order) ? Math.trunc(raw.order) : index;
+  // A VS Code project keeps its own VS Code executable in `program` (empty: found on this machine) and its command.
+  const command = type === 'vscode'
+    ? (typeof raw.command === 'string' ? raw.command.trim().slice(0, MAX_LAUNCH_COMMAND) : '')
+    : '';
+  const vsCode = type === 'vscode' ? (nonEmptyString(raw.program, MAX_LAUNCH_TARGET) ?? '') : '';
   const name = typeof raw.name === 'string' && raw.name.trim() !== ''
     ? sanitizeName(raw.name, suggestName(target, type), MAX_LAUNCH_NAME)
     : suggestName(target, type) || target.slice(0, MAX_LAUNCH_NAME).toUpperCase();
@@ -126,8 +160,10 @@ function normalizeItem(raw: unknown, index: number): LaunchItem | null {
     type,
     target,
     openMode,
-    program,
+    program: type === 'vscode' ? vsCode : program,
     args,
+    cwd,
+    command,
     enabled: typeof raw.enabled === 'boolean' ? raw.enabled : true,
     checked: typeof raw.checked === 'boolean' ? raw.checked : true,
     order,
@@ -208,11 +244,11 @@ export function namesForToast(items: readonly LaunchItem[], max = LAUNCH_NAMES_M
 }
 
 /** Why one entry did not open. */
-export type LaunchFailure = 'badUrl' | 'missingTarget' | 'missingProgram' | 'failed';
+export type LaunchFailure = 'badUrl' | 'missingTarget' | 'missingProgram' | 'noVsCode' | 'failed';
 
 export interface LaunchProblem {
   /** Which field of the form is at fault. */
-  field: 'target' | 'program';
+  field: 'target' | 'program' | 'cwd' | 'command';
   reason: 'empty' | 'badUrl' | 'missing';
 }
 
@@ -222,12 +258,15 @@ export function launchFailureText(t: Strings, reason: LaunchFailure): string {
     case 'badUrl': return t.launchFailBadUrl;
     case 'missingTarget': return t.launchFailMissingTarget;
     case 'missingProgram': return t.launchFailMissingProgram;
+    case 'noVsCode': return t.launchFailNoVsCode;
     default: return t.launchFailFailed;
   }
 }
 
 /** A form problem as the user reads it. */
 export function launchProblemText(t: Strings, problem: LaunchProblem): string {
+  if (problem.field === 'cwd') return t.launchErrCwdMissing;
+  if (problem.field === 'command') return t.launchErrCommandEmpty;
   if (problem.field === 'program') {
     return problem.reason === 'empty' ? t.launchErrProgramEmpty : t.launchErrProgramMissing;
   }

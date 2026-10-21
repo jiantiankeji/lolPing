@@ -6,9 +6,9 @@ import { Add24Regular, ArrowDown24Regular, ArrowUp24Regular, Delete24Regular, Ed
 import { useEffect, useState } from 'react';
 import type { Strings } from '../../../shared/i18n';
 import {
-  LAUNCH_CONFIG_VERSION, LAUNCH_OPEN_MODES, LAUNCH_TYPES, activePlan, launchProblemText, suggestName,
-  type LaunchConfig, type LaunchDraft, type LaunchItem, type LaunchOpenMode, type LaunchPlan, type LaunchProblem,
-  type LaunchType,
+  DEFAULT_VSCODE_COMMAND, LAUNCH_CONFIG_VERSION, LAUNCH_OPEN_MODES, LAUNCH_TYPES, activePlan, launchProblemText,
+  suggestName, type LaunchConfig, type LaunchDraft, type LaunchItem, type LaunchOpenMode, type LaunchPlan,
+  type LaunchProblem, type LaunchType,
 } from '../../../shared/launchItems';
 import { api } from '../api';
 import { useText } from '../text';
@@ -21,20 +21,24 @@ interface Draft {
   target: string;
   openMode: LaunchOpenMode;
   program: string;
+  cwd: string;
+  command: string;
   argsText: string;
   enabled: boolean;
   checked: boolean;
 }
 
 const emptyDraft = (): Draft => ({
-  id: '', name: '', type: 'app', target: '', openMode: 'default', program: '', argsText: '', enabled: true, checked: true,
+  id: '', name: '', type: 'app', target: '', openMode: 'default', program: '', cwd: '', command: DEFAULT_VSCODE_COMMAND,
+  argsText: '', enabled: true, checked: true,
 });
 
 const toDraft = (item: LaunchItem): Draft => ({ ...item, argsText: item.args.join('\n') });
 
 function toItem(draft: Draft, order: number): LaunchItem {
-  const program = draft.openMode === 'program' ? draft.program.trim() : '';
-  const usesProgram = program !== '';
+  const vsCode = draft.type === 'vscode';
+  const program = vsCode ? draft.program.trim() : draft.openMode === 'program' ? draft.program.trim() : '';
+  const usesProgram = !vsCode && program !== '';
   return {
     id: draft.id !== '' ? draft.id : `item-${Date.now().toString(36)}`,
     name: draft.name.trim() !== '' ? draft.name.trim() : suggestName(draft.target, draft.type),
@@ -42,9 +46,11 @@ function toItem(draft: Draft, order: number): LaunchItem {
     target: draft.target.trim(),
     openMode: usesProgram ? 'program' : 'default',
     program,
+    cwd: usesProgram ? draft.cwd.trim() : '',
     args: usesProgram
       ? draft.argsText.split(/\r?\n/).map((arg) => arg.trim()).filter((arg) => arg !== '')
       : [],
+    command: vsCode ? draft.command.trim() : '',
     enabled: draft.enabled,
     checked: draft.checked,
     order,
@@ -56,6 +62,7 @@ const typeLabel = (t: Strings, type: LaunchType): string => {
     case 'url': return t.launchTypeUrl;
     case 'app': return t.launchTypeApp;
     case 'file': return t.launchTypeFile;
+    case 'vscode': return t.launchTypeVscode;
     default: return t.launchTypeFolder;
   }
 };
@@ -146,7 +153,10 @@ export function LaunchSection() {
   const submit = async (): Promise<void> => {
     if (!editing) return;
     const item = toItem(editing.draft, editing.index < 0 ? plan.items.length : editing.index);
-    const draft: LaunchDraft = { type: item.type, target: item.target, openMode: item.openMode, program: item.program };
+    const draft: LaunchDraft = {
+      type: item.type, target: item.target, openMode: item.openMode, program: item.program, cwd: item.cwd,
+      command: item.command,
+    };
     const found = await api.checkLaunch(draft);
     if (found.length > 0) {
       setProblems(found);
@@ -221,7 +231,9 @@ export function LaunchSection() {
           <Checkbox checked={item.checked} onChange={(_, d) => patch(index, { checked: d.checked === true })} />
           <div className="lbl">
             <b>{item.name}</b>
-            <span className="desc">{typeLabel(t, item.type)} · {item.target}</span>
+            <span className="desc">
+              {typeLabel(t, item.type)} · {item.target}{item.type === 'vscode' ? ` · ${item.command}` : ''}
+            </span>
           </div>
           <div className="ctl">
             <Switch checked={item.enabled} label={item.enabled ? t.on : t.off} labelPosition="before"
@@ -292,13 +304,42 @@ export function LaunchSection() {
                         onChange={(_, d) => setDraft({ target: d.value })} />
                       {editing.draft.type !== 'url' ? (
                         <Button onClick={async () => {
-                          const kind = editing.draft.type === 'folder' ? 'folder' : editing.draft.type === 'app' ? 'program' : 'file';
+                          const kind = editing.draft.type === 'folder' || editing.draft.type === 'vscode'
+                            ? 'folder' : editing.draft.type === 'app' ? 'program' : 'file';
                           const picked = await api.pickLaunchPath(kind);
                           if (picked !== null) setDraft({ target: picked });
                         }}>{t.launchBrowse}</Button>
                       ) : null}
                     </div>
                   </Field>
+                  {editing.draft.type === 'vscode' ? (
+                    <>
+                      <Field
+                        label={t.launchCommand}
+                        hint={t.launchCommandHint}
+                        validationState={problemOf('command') !== null ? 'error' : 'none'}
+                        validationMessage={problemOf('command') ?? undefined}
+                      >
+                        <Input value={editing.draft.command} placeholder={DEFAULT_VSCODE_COMMAND}
+                          onChange={(_, d) => setDraft({ command: d.value })} />
+                      </Field>
+                      <Field
+                        label={t.launchVsCode}
+                        hint={t.launchVsCodeHint}
+                        validationState={problemOf('program') !== null ? 'error' : 'none'}
+                        validationMessage={problemOf('program') ?? undefined}
+                      >
+                        <div className="launch-target">
+                          <Input value={editing.draft.program} placeholder="C:\\…\\Code.exe"
+                            onChange={(_, d) => setDraft({ program: d.value })} />
+                          <Button onClick={async () => {
+                            const picked = await api.pickLaunchPath('program');
+                            if (picked !== null) setDraft({ program: picked });
+                          }}>{t.launchBrowse}</Button>
+                        </div>
+                      </Field>
+                    </>
+                  ) : null}
                   {canChooseProgram(editing.draft.type) ? (
                     <Field label={t.launchOpenMode}>
                       <Dropdown
@@ -332,6 +373,21 @@ export function LaunchSection() {
                       <Field label={t.launchArgs} hint={t.launchArgsHint}>
                         <Textarea value={editing.draft.argsText} textarea={{ rows: 3 }} resize="vertical"
                           onChange={(_, d) => setDraft({ argsText: d.value })} />
+                      </Field>
+                      <Field
+                        label={t.launchCwd}
+                        hint={t.launchCwdHint}
+                        validationState={problemOf('cwd') !== null ? 'error' : 'none'}
+                        validationMessage={problemOf('cwd') ?? undefined}
+                      >
+                        <div className="launch-target">
+                          <Input value={editing.draft.cwd} placeholder={editing.draft.type === 'folder' ? editing.draft.target : 'C:\\…'}
+                            onChange={(_, d) => setDraft({ cwd: d.value })} />
+                          <Button onClick={async () => {
+                            const picked = await api.pickLaunchPath('folder');
+                            if (picked !== null) setDraft({ cwd: picked });
+                          }}>{t.launchBrowse}</Button>
+                        </div>
                       </Field>
                     </>
                   ) : null}
