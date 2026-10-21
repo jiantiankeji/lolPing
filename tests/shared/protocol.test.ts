@@ -30,6 +30,15 @@ describe('parseHelperLine', () => {
     }
   });
 
+  it('reports the modifiers a release carried, and refuses nonsense ones', () => {
+    expect(parseHelperLine('{"type":"wheelRelease","x":1,"y":2,"wheel":"ping","mods":5}'))
+      .toEqual({ type: 'wheelRelease', x: 1, y: 2, wheel: 'ping', mods: 5 });
+    for (const mods of ['"5"', '16', '-1', '1.5', 'null', '{}']) {
+      expect(parseHelperLine(`{"type":"wheelRelease","x":1,"y":2,"mods":${mods}}`), mods)
+        .toEqual({ type: 'wheelRelease', x: 1, y: 2, wheel: 'ping' });
+    }
+  });
+
   it('rejects malformed lines', () => {
     for (const line of ['', 'nope', '42', 'null', '{"type":"wheelOpen","x":1}', '{"type":"click","x":1.5,"y":2}',
       '{"type":"toggled"}', '{"type":"panel"}', '{"type":"panel","show":"yes"}', '{"type":"mystery"}', '{"x":1,"y":2}']) {
@@ -60,6 +69,14 @@ describe('commands', () => {
     expect(configCommand(DEFAULT_SETTINGS, true, { text: false, panel: false })).toMatchObject({ panelVk: 0 });
     expect(configCommand(DEFAULT_SETTINGS, true, { text: false, panel: true })).toMatchObject({ panelVk: 9 });
     expect(configCommand({ ...DEFAULT_SETTINGS, panelKey: 0xc0 }, true, { text: true, panel: true })).toMatchObject({ panelVk: 0xc0 });
+  });
+
+  it('lends that channel to another key, which is how the shutdown countdown holds Esc', () => {
+    expect(configCommand(DEFAULT_SETTINGS, true, { text: false, panel: false, panelVk: 0x1b }))
+      .toMatchObject({ panelVk: 0x1b });
+    // It wins over the panel key even inside a room: only one key at a time can be held.
+    expect(configCommand(DEFAULT_SETTINGS, true, { text: true, panel: true, panelVk: 0x1b }))
+      .toMatchObject({ panelVk: 0x1b, textVk: 0x54 });
   });
 
   it('builds a config command for a custom key trigger', () => {

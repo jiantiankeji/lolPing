@@ -58,16 +58,24 @@ function localArt(ref: EmoteRef): EmoteArt {
 
 /** Our newest ping on this display while "Keep my last ping on screen" is on. */
 let keptPing: HTMLElement | null = null;
+/** The ping the AI is holding while it thinks about the screenshot: kept past its animation, until `ping:release`. */
+let heldPing: HTMLElement | null = null;
 
 function dropKeptPing(): void {
   keptPing?.remove();
   keptPing = null;
 }
 
+function releaseHeldPing(): void {
+  heldPing?.remove();
+  heldPing = null;
+}
+
 function applySettings(s: OverlaySettings): void {
   settings = s;
   sounds.forget(CUSTOM_EMOTE_URL); // an imported emote's sound may have been replaced: load it again when it next plays
   if (!s.keepLastPing) dropKeptPing();
+  if (!s.holdPingId) releaseHeldPing();
   pingWheel.setSize(s.wheelSizePx);
   emoteWheel.setSize(s.wheelSizePx);
   pingWheel.setItems(pingsFor(s.wheel).map(pingItem));
@@ -78,10 +86,15 @@ function applySettings(s: OverlaySettings): void {
 }
 applySettings(settings);
 
-function ping(def: PingDef, x: number, y: number, tag?: PingTag, keep = false): void {
+function ping(def: PingDef, x: number, y: number, tag?: PingTag, keep = false, hold = false): void {
   if (keep) dropKeptPing();
-  const el = spawnPing(pingLayer, def, x, y, { sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep });
+  // `hold` is the AI's: the ping stays up past its animation, until `ping:release`, because the thinking lasts longer.
+  const el = spawnPing(pingLayer, def, x, y, { sizePx: settings.pingSizePx, durationS: settings.pingDurationS, tag, keep: keep || hold });
   if (keep) keptPing = el;
+  if (hold) {
+    if (heldPing !== el) heldPing?.remove();
+    heldPing = el;
+  }
   sounds.play(def.sound, volume());
 }
 
@@ -105,7 +118,8 @@ window.overlay.on('wheel:release', (p) => {
     window.overlay.reportEmote(chosen.key, chosen.x, chosen.y);
   } else {
     const def = pingById(chosen.key) ?? fallbackPing;
-    ping(def, chosen.x, chosen.y, undefined, settings.keepLastPing);
+    // The AI answers the All In ping, so its icon is held until the answer (or the failure) arrives.
+    ping(def, chosen.x, chosen.y, undefined, settings.keepLastPing, def.id === settings.holdPingId);
     window.overlay.reportPing(def.id, chosen.x, chosen.y);
   }
 });
@@ -113,12 +127,19 @@ window.overlay.on('wheel:cancel', () => {
   pingWheel.cancel();
   emoteWheel.cancel();
 });
-window.overlay.on('ping:spawn', (p) => ping(pingById(p.id) ?? fallbackPing, p.x, p.y, p.tag, p.keep === true));
+window.overlay.on('ping:spawn', (p) => {
+  const def = pingById(p.id) ?? fallbackPing;
+  // Another member's ping is never ours to hold, and a preview says so itself.
+  const hold = p.hold ?? (!p.tag && def.id === settings.holdPingId);
+  ping(def, p.x, p.y, p.tag, p.keep === true, hold);
+});
 window.overlay.on('ping:unkeep', dropKeptPing);
+window.overlay.on('ping:release', releaseHeldPing);
 window.overlay.on('emote:spawn', (p) => emote(p.owner, p.art, p.x, p.y, p.tag));
 window.overlay.on('emote:clear', (p) => stage.clear(p.owner));
-window.overlay.on('toast:show', (t) => showToast(toastLayer, t.title, t.body));
+window.overlay.on('toast:show', (t) => showToast(toastLayer, t.title, t.body, t.ms));
 window.overlay.on('text:spawn', (t) => texts.spawn(t));
+window.overlay.on('text:clear', (p) => texts.clear(p.owner));
 
 /** Resolves with `label` when the image at `url` doesn't load. */
 const probe = (url: string, label: string): Promise<string | null> =>

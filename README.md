@@ -67,12 +67,17 @@ Updating from v0.4 or earlier: download the new version by hand once. From v0.5 
 | Pause or resume pinging | **Ctrl + Alt + P** |
 | Type a line to the room (in a room) | **Alt + T**, type, then press **Enter** |
 | Show who is in the room (in a room) | Hold **Tab** |
+| Ask DeepSeek about the screen (set up first) | Hold **Alt**, drag to the question mark, and let go |
+| Ask DeepSeek to think about the screen (set up first) | Hold **Alt**, drag to All In, and let go |
+| Ask DeepSeek your own question (set up first) | Hold **Alt + Shift**, drag to All In, type it, press **Enter** |
+| Open my workspace (set up first) | Hold **Alt**, drag to Assist Me, and let go |
+| Shut the PC down (Windows) | Hold **Alt**, drag to Danger, and let go |
 | Open settings | Click the tray icon |
 | Quit, or restart the input helper | Right-click the tray icon |
 
 On a Mac, use **⌥ Option** instead of Alt, **⌃ Control** instead of Ctrl for emotes, **⌃⌥P** to pause, and the ping icon in the menu bar instead of the tray icon.
 
-The wheel, from the top going clockwise: Danger, Push, On My Way, All In, Assist Me, Need Vision, Enemy Missing, Enemy Vision. You can rearrange it and add Bait, Vision Cleared or an upside-down Enemy Missing ("¿") in settings. The emote wheel has 8 slots too, and you pick its emotes in settings. Each imported image plays its own signature effect (a spin, a bounce, a heartbeat...), picked by right-clicking it in the settings window from a grid where every effect plays live on that image.
+The wheel, from the top going clockwise: Danger, Push, On My Way, All In, Assist Me, Need Vision, Enemy Missing, Enemy Vision. You can rearrange it and add Bait, Vision Cleared, an upside-down Enemy Missing ("¿") or a question mark ("?") in settings. The emote wheel has 8 slots too, and you pick its emotes in settings. Each imported image plays its own signature effect (a spin, a bounce, a heartbeat...), picked by right-clicking it in the settings window from a grid where every effect plays live on that image.
 
 ## Settings
 
@@ -83,10 +88,13 @@ The wheel, from the top going clockwise: Danger, Push, On My Way, All In, Assist
 - **Pause in fullscreen apps:** on by default. A fullscreen game keeps every click — trigger + click does nothing there — and gestures resume on the desktop and on other monitors. Windowed games aren't detected, and with an auto-hiding taskbar only borderless fullscreen counts. Windows only for now.
 - **Enable / disable shortcut:** must include Ctrl, Alt or Win (⌃, ⌥ or ⌘ on a Mac).
 - **Pings and sound:** size, duration, volume, mute and the wheel's tick sound. **Keep my last ping on screen** leaves your newest ping up until your next one or until you pause lolPing, for example to mark where you stopped reading.
-- **Wheel:** adjust the size of both the ping and emote wheels, without changing placed pings or emotes. Drag any ping onto any slice, including Bait, Vision Cleared and the upside-down Enemy Missing, or onto the centre to make it the Alt + click ping. Click a ping to preview it. **Reset to default** brings back League's layout.
+- **The retreat ping shuts this PC down:** on by default, Windows only. Placing Danger counts down five seconds and then runs `shutdown /s /t 0`, so save your work first, or turn this off. Call it off with the card's **Cancel**, another Danger ping, **Esc** or the pause shortcut. lolPing counts the five seconds itself: quitting lolPing or switching this off cancels them, and an app with unsaved work can still block the shutdown.
+- **Wheel:** adjust the size of both the ping and emote wheels, without changing placed pings or emotes. Drag any ping onto any slice, including Bait, Vision Cleared, the upside-down Enemy Missing and the question mark, or onto the centre to make it the Alt + click ping. Click a ping to preview it. **Reset to default** brings back League's layout.
 - **Emotes:** the emote key (Ctrl by default, or off), **Ctrl + click places an emote** (off by default), emote size, emote sound and the emote wheel, which you edit like the ping wheel. **Add image…**, or dropping a file on the list, adds your own images: PNG, JPG, GIF or WebP, up to 24. Animated ones play on your screen only. The speaker on one of your images gives it a sound (MP3, OGG or WAV, up to 1 MB and 5 seconds), which plays on your computer only.
 - **Room:** your name and tag colour, how friends' text appears (at the spot they pointed at, or scrolling across the top as 弹幕), the **text shortcut** (Alt + T by default) and the **room panel key** (Tab by default). The text shortcut and the panel key reach other apps except while you are in a room.
 - **Features:** turns off the parts you don't use: emotes, rooms, room text, votes and the room panel. A feature that is off has no keys, no settings section, sends nothing and ignores what friends send for it.
+- **Ask AI:** lets the question mark ask DeepSeek about your screen. Hold the ping key, drag to the question mark on the wheel, and let go: lolPing sends one screenshot of that display to api.deepseek.com (model deepseek-flash) and shows the answer where you pinged. **All In** asks about the same screenshot but lets the model think it through first: it says "Thinking it through…" while it does, and the All In icon stays up until the answer arrives. Hold **Shift** as you drop All In to ask a question of your own instead: type it in the box, press **Enter**, and **Esc** cancels. Paste a key from platform.deepseek.com; it is saved in the settings file. On by default, but with no key nothing is sent beyond one hint to add one, and the only thing that leaves your computer is that screenshot and the question.
+- **Request gather:** the Assist Me ping opens the active plan: a named list of programs, files, folders and URLs, opened in order. Keep one plan for writing code and another for reading, and switch between them with the plan picker — plans can be added, renamed and deleted, and each keeps its own list. Each row has a name, a tick (open it on this ping) and a switch (keep it in the list without opening it). Files and folders can go to the system's default program, or to one you pick — VS Code or IDEA — with arguments where `{path}` becomes the target. A URL must start with http:// or https://, and a path must exist; the form says so under the field before anything is saved. The workspace is saved in `launch.json` next to the settings file. Only the entries you configured are ever started, each from its path and argument list, never through a shell. Opening a URL hands it to your browser, which then visits that site as usual.
 - **Launch at Windows startup** (**Open at login** on a Mac): starts hidden in the tray or menu bar.
 - **Language:** follows the system display language, or pick English or 简体中文.
 
@@ -131,6 +139,8 @@ Join a room and everyone in it sees your pings on their own screen, at the same 
 - While you are in a room, a held Tab shows the room panel and doesn't reach other apps, and Alt + T opens the text box instead of reaching the app underneath. Change these keys, or turn the features off, in Settings → Room and Settings → Features.
 - While lolPing is on, Ctrl + drag opens the emote wheel instead of copying files or text. Pick another emote key, or turn it off, in Settings → Emotes.
 - On a Mac, the wheel can't open while a secure screen is showing, such as the login window or a password prompt, and Accessibility has to be allowed again after each update.
+- Ask AI needs a screen recording permission on a Mac: macOS asks the first time, and until it is allowed the question mark only answers "lolPing could not take the screenshot". Linux screen capture depends on the desktop session.
+- With the retreat shutdown on, the countdown holds Esc for five seconds: the room panel key does nothing during them, and over a fullscreen app (with Pause in fullscreen apps on) Esc reaches that app instead, so cancel from the card or the pause shortcut.
 
 ## Build from source
 

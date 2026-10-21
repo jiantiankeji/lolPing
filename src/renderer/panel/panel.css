@@ -151,3 +151,18 @@ button.tag:hover { text-decoration: underline; }
 .line .who { display: inline; margin-right: 6px; font-weight: 600; color: var(--tag); }
 .line .who::after { content: ":"; }
 .line.vote .said { color: var(--gold-3); }
+
+/* ---------- shutdown countdown: a card in the middle of the screen, 320 x 176 ---------- */
+.countdown-card {
+  width: 320px; height: 176px; padding: 16px; display: flex; flex-direction: column; align-items: center;
+  justify-content: center; gap: 12px; border: 1px solid var(--gold-4); background: rgba(1, 10, 19, .94);
+  box-shadow: 0 10px 34px rgba(0, 0, 0, .65);
+}
+.countdown-title { font: 700 26px/1.2 var(--serif); color: var(--gold-1); text-align: center; }
+.countdown-cancel {
+  width: 132px; height: 32px; padding: 0; border: 1px solid var(--gold-4); background: linear-gradient(#1e2328, #121517);
+  font: 700 15px/30px var(--sans); color: var(--gold-1);
+}
+.countdown-cancel:hover { border-color: var(--gold-2); background: linear-gradient(#28303a, #16191c); }
+.countdown-cancel:active { background: #0a0c0e; }
+.countdown-hint { font: 12px/16px var(--sans); color: var(--grey-1); text-align: center; }

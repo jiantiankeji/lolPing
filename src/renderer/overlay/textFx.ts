@@ -4,6 +4,8 @@ import type { RoomTextStyle } from '../../shared/settings';
 import { DanmakuLanes, OwnerLimit, keepOnScreen, textDurationMs } from './roomTextLayout';
 
 const MAX_LINES_PER_OWNER = 3;
+/** A sticky line's fade-out waits this long; what it waits for is `clear(owner)`. */
+const STICKY_MS = 60 * 60 * 1000;
 /** 弹幕 lines all move at this speed, so a lane stays clear behind the line in front of it. */
 const DANMAKU_SPEED_PX_S = 160;
 const DANMAKU_LINE_PX = 34;
@@ -18,6 +20,8 @@ export interface TextLine {
   owner: string;
   style: RoomTextStyle;
   tag?: PingTag;
+  /** Stays until `clear(owner)` takes it down: the work behind it is still running, and how long that takes is unknown. */
+  sticky?: boolean;
 }
 
 interface Shown {
@@ -54,7 +58,8 @@ export class TextStage {
   }
 
   private spawnSpot(id: number, line: TextLine): void {
-    const ms = textDurationMs(line.text);
+    // A sticky line still fades out through the same keyframes; it just has an hour to wait before that.
+    const ms = line.sticky ? STICKY_MS : textDurationMs(line.text);
     const root = el('text-pop');
     root.style.setProperty('--dur', `${ms}ms`);
     if (line.tag) root.append(this.nameOf('text-name', line.tag));
@@ -73,7 +78,9 @@ export class TextStage {
     }
     root.style.left = `${at.x}px`;
     root.style.top = `${at.y}px`;
-    this.shown.set(id, { owner: line.owner, root, timer: setTimeout(() => this.drop(id), ms) });
+    this.shown.set(id, {
+      owner: line.owner, root, timer: line.sticky ? null : setTimeout(() => this.drop(id), ms),
+    });
   }
 
   private spawnDanmaku(id: number, line: TextLine): void {
@@ -121,6 +128,11 @@ export class TextStage {
     line.root.style.setProperty('--dur', `${ms}ms`);
     line.root.classList.remove('wait');
     line.timer = setTimeout(() => this.drop(id), ms);
+  }
+
+  /** Takes down everything one owner has up: a sticky line is over, or a message should not outlive its answer. */
+  clear(owner: string): void {
+    for (const [id, line] of [...this.shown]) if (line.owner === owner) this.drop(id);
   }
 
   /** Takes a line down, whether it is on screen or still waiting for a lane. */

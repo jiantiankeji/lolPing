@@ -164,6 +164,24 @@ describe('OverlayManager emote clicks', () => {
   });
 });
 
+describe('OverlayManager release modifiers', () => {
+  it('forwards the modifiers of a release, and hands them over once', () => {
+    mgr.handle({ type: 'wheelOpen', x: 100, y: 200, wheel: 'ping' });
+    mgr.handle({ type: 'wheelRelease', x: 140, y: 200, wheel: 'ping', mods: 5 });
+    expect(sent(0)).toContainEqual(['wheel:release', { x: 140, y: 200, wheel: 'ping', mods: 5 }]);
+    // Read once: the ping that follows the release takes them, and the next one must not inherit them.
+    expect(mgr.takeReleaseMods()).toBe(5);
+    expect(mgr.takeReleaseMods()).toBe(0);
+  });
+
+  it('reports no modifiers for a release that carried none', () => {
+    mgr.handle({ type: 'wheelOpen', x: 100, y: 200, wheel: 'ping' });
+    mgr.handle({ type: 'wheelRelease', x: 140, y: 200, wheel: 'ping' });
+    expect(sent(0)).toContainEqual(['wheel:release', { x: 140, y: 200, wheel: 'ping' }]);
+    expect(mgr.takeReleaseMods()).toBe(0);
+  });
+});
+
 describe('OverlayManager emote reports from the overlay', () => {
   const sender = (i: number): unknown => h.windows[i].webContents;
 
@@ -225,12 +243,13 @@ describe('OverlayManager kept ping', () => {
     expect(sent(1)).toEqual([['ping:unkeep', null]]);
   });
 
-  it('never keeps a room member’s ping or a preview', () => {
+  it('never keeps a room member’s ping, and says a preview is not held either', () => {
     keepOn();
     mgr.spawnRemote({ displayId: 2, x: 1, y: 1, id: 'danger', tag: { name: 'Bot', color: 0 } });
     mgr.previewPing('danger');
     expect(sent(1)).toEqual([['ping:spawn', { id: 'danger', x: 1, y: 1, tag: { name: 'Bot', color: 0 } }]]);
-    expect(sent(0)).toEqual([['ping:spawn', { id: 'danger', x: 960, y: 540 }]]);
+    // `hold: false` keeps the AI's deep ping from keeping a preview's icon up on screen.
+    expect(sent(0)).toEqual([['ping:spawn', { id: 'danger', x: 960, y: 540, hold: false }]]);
   });
 });
 

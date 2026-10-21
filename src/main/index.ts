@@ -1,23 +1,28 @@
 import { app, clipboard, dialog, Menu, powerMonitor, screen, shell, systemPreferences } from 'electron';
+import { spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { resolveLang, strings, type Strings } from '../shared/i18n';
+import { AI_DEEP_PING, AI_QUICK_PING, DEEP_PROMPT_MAX } from '../shared/aiAsk';
+import { activePlan, LAUNCH_PING, launchableItems, launchFailureText, namesForToast } from '../shared/launchItems';
 import { SETTINGS_CH, type About, type AppStatus, type PanelAction, type PanelState } from '../shared/ipc';
 import { announcedEmoteHashes } from '../shared/emotes';
 import { featureOn, liveKeys, roomFeaturesOff } from '../shared/features';
-import { hotkeyLabel } from '../shared/keys';
+import { hotkeyLabel, MOD } from '../shared/keys';
 import { LOGO_TEXTURE } from '../shared/pings';
 import { configCommand, type HelperStatus } from '../shared/protocol';
 import type { RoomState } from '../shared/room';
-import type { VoteKind } from '../shared/roomProtocol';
+import { MAX_TEXT, type VoteKind } from '../shared/roomProtocol';
 import { formatRoomCode, parseRoomCode } from '../shared/roomCode';
 import { sameTagRgb, tagWire } from '../shared/roomColors';
 import { overlaySettings, soundLevel, type Settings } from '../shared/settings';
 import { parseTextInput } from '../shared/textCommands';
 import { updateErrorText, type UpdateState } from '../shared/update';
 import { registerAppScheme, serveAppScheme } from './appProtocol';
+import { AiPing } from './aiPing';
+import { DeepSeekVision } from './deepseekVision';
 import { resolveTarget, toShared } from './displayNumbers';
 import { EmoteCache } from './emoteCache';
 import { EmoteLibrary, resolveEmoteArt } from './emoteLibrary';
@@ -25,6 +30,9 @@ import { EmoteTransfer } from './emoteTransfer';
 import { isFile } from './fileState';
 import { InputBridge } from './inputBridge';
 import { LanTransport } from './lanTransport';
+import { runLaunchItems } from './launcher';
+import { systemLauncher } from './launcherHost';
+import { LaunchStore } from './launchStore';
 import { RELAYS } from './relays';
 import { RelayTransport } from './relayTransport';
 import { OverlayManager, type SharedEmote, type SharedPing } from './overlayManager';
@@ -35,8 +43,10 @@ import { PanelWindows } from './panelWindows';
 import { MAX_MEMBERS, RoomManager, type RoomToast } from './roomManager';
 import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
+import { captureDisplay } from './screenShot';
 import { registerSettingsIpc } from './settingsIpc';
 import { SettingsStore } from './settingsStore';
+import { ShutdownCountdown } from './shutdownCountdown';
 import { onSettingsWindowGone, openSettingsWindow, settingsWindow } from './settingsWindow';
 import { closeTextWindow, onTextWindowGone, openTextWindow, registerTextWindow } from './textWindow';
 import { AppTray, trayUpdateFrom, type TrayMode } from './tray';
@@ -47,6 +57,9 @@ import { Updater } from './updater';
 import { setLinuxAutostart } from './linuxAutostart';
 
 const ACCESSIBILITY_PANE = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility';
+
+/** Esc: the key the countdown takes over, so it can be called off from the keyboard. */
+const ESC_VK = 0x1b;
 
 // X11 uses root-window pixels. Keep Electron in the same coordinate space on every monitor.
 if (IS_LINUX) {
@@ -102,6 +115,9 @@ function start(): void {
     setMacMenu();
   }
   const store = new SettingsStore(settingsDir(), undefined, PLATFORM, { name: osUserName(), color: randomInt(8) });
+  // The request gather workspace lives beside the settings, in its own file: it is a list, not a setting.
+  const launch = new LaunchStore(settingsDir());
+  launch.load();
   let settings = store.load();
   // An imported emote whose still is gone is dropped; normalising the shorter list repairs the wheel slots that used it.
   const kept = library.present(settings.customEmotes);
@@ -318,17 +334,103 @@ function start(): void {
     live = liveKeys(settings, { active: room.state().phase === 'active' }, enabled);
     // The helper stops reporting a held panel key once it is off, so the roster would stay up: hide it here.
     if (!live.panel) panels.hideRoster();
-    bridge.send(configCommand(settings, enabled, live));
+    // The countdown borrows the panel key's channel to hold Esc: the helper captures one key without a modifier, and the
+    // roster is not what matters while the machine is about to go down.
+    const held = countdown.running();
+    bridge.send(configCommand(settings, enabled, held ? { ...live, panel: true, panelVk: ESC_VK } : live));
   };
+  // The retreat ping's five seconds. lolPing counts them itself, so quitting or switching the setting off cancels them.
+  const countdown = new ShutdownCountdown({
+    now: Date.now,
+    lang: () => resolveLang(settings.language, app.getLocale()),
+    hotkey: () => hotkeyLabel(settings.toggleHotkey, PLATFORM),
+    show: (state) => {
+      if (state) panels.showCountdown(state);
+      else panels.hideCountdown();
+      sendConfig(); // Esc is the helper's only while the card is up
+    },
+    shutdown: () => {
+      if (PLATFORM !== 'win') return;
+      const failed = (err: unknown): void => {
+        console.warn('[shutdown]', err);
+        if (!quitting) overlays.toast(text().shutdownFailed, '');
+      };
+      try {
+        const child = spawn('shutdown', ['/s', '/t', '0'], { detached: true, stdio: 'ignore' });
+        child.on('error', failed);
+        child.unref();
+      } catch (err) {
+        failed(err);
+      }
+    },
+  });
   room.on('state', () => {
     const next = liveKeys(settings, { active: room.state().phase === 'active' }, enabled);
     if (next.text !== live.text || next.panel !== live.panel) sendConfig();
   });
   overlays.on('displays', pushRoom);
   room.on('remotePing', (p) => overlays.spawnRemote(p));
+  // The ? ping asks DeepSeek about a screenshot of the display it was placed on; with the setting off it is a plain ping.
+  const vision = new DeepSeekVision({ fetch: (url, init) => fetch(url, init) });
+  const aiPing = new AiPing({
+    settings: () => ({ aiAsk: settings.aiAsk, deepseekKey: settings.deepseekKey }),
+    lang: () => resolveLang(settings.language, app.getLocale()),
+    text,
+    capture: (displayId) => captureDisplay(displayId),
+    vision: (input) => vision.ask(input),
+    show: (p) => overlays.spawnText({ ...p, y: Math.max(48, p.y - 48), style: 'spot' }),
+    clearText: (owner) => overlays.clearText(owner),
+    releasePing: () => overlays.releaseHeldPing(),
+    toast: (title, body) => {
+      if (!quitting) overlays.toast(title, body);
+    },
+    now: Date.now,
+  });
+  // Request gather: the Assist Me ping opens the workspace kept in launch.json.
+  let launching = false;
+  let lastLaunchAt = Number.NEGATIVE_INFINITY;
+  const runWorkspace = async (): Promise<void> => {
+    const now = Date.now();
+    // A double tap must not open the workspace twice.
+    if (launching || now - lastLaunchAt < 3000) return;
+    lastLaunchAt = now;
+    const t = text();
+    const items = launchableItems(activePlan(launch.get()));
+    if (items.length === 0) {
+      overlays.toast(t.launchNoneTitle, t.launchNoneBody);
+      return;
+    }
+    launching = true;
+    overlays.toast(t.launchStartingTitle(namesForToast(items)), '');
+    try {
+      const report = await runLaunchItems(items, systemLauncher);
+      if (quitting) return;
+      if (report.failed.length === 0) {
+        overlays.toast(t.launchDoneTitle(report.opened.length), '');
+        return;
+      }
+      // One item's failure never hides the others: each is named, and the toast stays long enough to read them.
+      const lines = report.failed.map((f) => t.launchFailedLine(f.item.name, launchFailureText(t, f.failure)));
+      overlays.toast(t.launchPartialTitle(report.opened.length, report.failed.length), lines.join('\n'), 5000);
+    } finally {
+      launching = false;
+    }
+  };
   overlays.on('shared', (p: SharedPing) => {
+    // Read even when nothing asks, so a release's modifiers never leak onto the ping after it.
+    const held = overlays.takeReleaseMods();
     const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
     if (shared) room.sendPing(p.id, shared);
+    if (p.id === AI_QUICK_PING) void aiPing.ping({ displayId: p.displayId, x: p.x, y: p.y });
+    // All In asks the built-in question. With Shift held it asks one of your own instead, typed in the box.
+    if (p.id === AI_DEEP_PING) {
+      const own = (held & MOD.shift) !== 0;
+      if (own && settings.aiAsk && settings.deepseekKey !== '') openAsk({ displayId: p.displayId, x: p.x, y: p.y });
+      else void aiPing.ping({ displayId: p.displayId, x: p.x, y: p.y }, true); // the built-in question, or one hint
+    }    // Windows only: the retreat ping starts the shutdown countdown, and calls it off while it runs.
+    if (p.id === 'danger' && PLATFORM === 'win' && settings.shutdownOnDanger) countdown.ping();
+    // Request gather: open the workspace the user ticked under Settings → Request gather.
+    if (p.id === LAUNCH_PING) void runWorkspace();
   });
   room.on('remoteEmote', (p) => {
     if (featureOn(settings, 'emotes')) overlays.spawnRemoteEmote(p);
@@ -395,6 +497,9 @@ function start(): void {
       case 'vote':
         startVote(a.kind);
         break;
+      case 'cancelShutdown':
+        countdown.cancel();
+        break;
     }
   });
   const startVote = (kind: VoteKind, target?: string): void => {
@@ -453,6 +558,7 @@ function start(): void {
     version: app.getVersion(),
     problems: [
       ...store.problems,
+      ...launch.problems,
       ...(store.emoteKeyClashed ? [text().problemEmoteKeyClash] : []),
       ...[...overlays.missingAssets].map((a) => text().missingAsset(a)),
     ],
@@ -460,6 +566,8 @@ function start(): void {
   });
 
   function setEnabled(on: boolean): void {
+    // The pause shortcut is one of the ways out of the shutdown countdown.
+    countdown.cancel();
     if (on === enabled) return;
     enabled = on;
     sendConfig(); // also refreshes the config re-sent after restarts
@@ -493,7 +601,16 @@ function start(): void {
     postLine(lineDeps, { kind: 'alive', owner: 'self', tag: ownTag(), ...spot, text: text().aliveLine(who.name) });
     if (shared) room.sendAlive(peer, shared);
   };
-  registerTextWindow((raw, at) => {
+  /** The All In ping whose box is open: it is answered where that ping landed, with the screenshot taken on submit. */
+  let asking: { displayId: number; x: number; y: number } | null = null;
+  registerTextWindow((raw, at, mode) => {
+    if (mode === 'ask') {
+      // The question was typed: take the screenshot now, and let the deep ask answer where the ping went.
+      const spot = asking;
+      asking = null;
+      if (spot) void aiPing.ping(spot, true, raw);
+      return 'sent';
+    }
     const input = parseTextInput(raw);
     switch (input.kind) {
       case 'text':
@@ -519,6 +636,11 @@ function start(): void {
   onTextWindowGone(() => {
     textOpen = false;
     syncSuspended();
+    // A question that was never sent: the ping must not stay held on screen for an answer that is not coming.
+    if (asking) {
+      asking = null;
+      overlays.releaseHeldPing();
+    }
   });
   const openText = (): void => {
     if (!live.text || textOpen || capturing) return;
@@ -527,6 +649,7 @@ function start(): void {
     const t = text();
     try {
       openTextWindow(screen.getCursorScreenPoint(), {
+        mode: 'room', max: MAX_TEXT,
         placeholder: t.textBoxPlaceholder, hint: t.textBoxHint, unknown: t.textBoxUnknown, votesOff: t.textBoxVotesOff,
       });
     } catch (err) {
@@ -536,11 +659,33 @@ function start(): void {
       syncSuspended();
     }
   };
+  /** The All In ping landed: open the box for its question. Nothing is captured or sent until Enter. */
+  const openAsk = (at: { displayId: number; x: number; y: number }): void => {
+    if (textOpen || capturing) return;
+    textOpen = true;
+    asking = at;
+    syncSuspended(); // the ping keys must not open a wheel while the question is being typed
+    const t = text();
+    try {
+      openTextWindow(screen.getCursorScreenPoint(), {
+        mode: 'ask', max: DEEP_PROMPT_MAX,
+        placeholder: t.aiAskPromptPlaceholder, hint: t.aiAskPromptHint, unknown: '', votesOff: '',
+      });
+    } catch (err) {
+      console.warn('[ai]', err);
+      textOpen = false;
+      asking = null;
+      syncSuspended();
+      overlays.releaseHeldPing(); // the ping is held until an answer arrives, and none will
+    }
+  };
   bridge.on('event', (ev) => {
     if (ev.type === 'toggled') setEnabled(ev.enabled);
     else if (ev.type === 'textRequested') openText();
     else if (ev.type === 'panel') {
-      if (!ev.show) panels.hideRoster();
+      // While the countdown holds the key (Esc), a press calls the shutdown off instead of opening the roster.
+      if (countdown.running() && ev.show) countdown.cancel();
+      else if (!ev.show) panels.hideRoster();
       else if (live.panel) panels.showRoster(screen.getCursorScreenPoint(), panelState('roster', null));
     } else if (ev.type === 'ready') {
       // A restarted helper starts unsuspended: re-apply an active key capture.
@@ -591,6 +736,8 @@ function start(): void {
       room.setInternetAllowed(s.allowInternet);
       pushRoom();
     }
+    // Switching the setting off must also stop a countdown that is already running.
+    if (!s.shutdownOnDanger) countdown.cancel();
     if (app.isPackaged && s.launchAtStartup !== previous.launchAtStartup) {
       // macOS ignores args, and a Mac launch starts in the menu bar anyway.
       if (IS_LINUX) {
@@ -606,6 +753,7 @@ function start(): void {
 
   registerSettingsIpc({
     store,
+    launch,
     library,
     getStatus: status,
     setEnabled,
@@ -672,12 +820,13 @@ function start(): void {
     quitting = true;
     event.preventDefault();
     updater?.stop(); // aborts a download and drops a check in flight; an install that is quitting the app is left alone
+    countdown.dispose(); // quitting lolPing calls the countdown off: nothing of ours shuts the machine down afterwards
     room.quit(); // says bye, so the others see "left" instead of waiting for a timeout
     transfer.stop();
     stopWaitingForAccess();
     tray.destroy();
     panels.destroy();
     overlays.destroy();
-    void Promise.allSettled([bridge.stop(), store.flush(), lan.whenClosed(), relay.whenClosed()]).then(() => app.exit(0));
+    void Promise.allSettled([bridge.stop(), store.flush(), launch.flush(), lan.whenClosed(), relay.whenClosed()]).then(() => app.exit(0));
   });
 }

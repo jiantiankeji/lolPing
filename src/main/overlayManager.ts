@@ -54,6 +54,8 @@ export class OverlayManager extends EventEmitter {
   private numberedList: NumberedDisplay[] = [];
   private wheelDisplay: number | null = null;
   private wheelKind: WheelKind = 'ping';
+  /** The modifiers of the last wheel release: the ping it placed arrives a moment later and reads them. */
+  private releaseMods = 0;
 
   /** `resolveArt` says what an emote looks like: `remote` is true for a room member's, whose files may be missing here. */
   constructor(private settings: OverlaySettings, private readonly resolveArt: (ref: EmoteRef, remote: boolean) => EmoteArt) {
@@ -110,8 +112,16 @@ export class OverlayManager extends EventEmitter {
         if (this.wheelDisplay === null) return;
         const p = physicalToLocal(ev.x, ev.y, this.maps, this.wheelDisplay);
         if (!p) return;
-        this.send(p.displayId, ev.type === 'wheelMove' ? 'wheel:move' : 'wheel:release', { x: p.x, y: p.y, wheel: this.wheelKind });
-        if (ev.type === 'wheelRelease') this.wheelDisplay = null;
+        if (ev.type === 'wheelMove') {
+          this.send(p.displayId, 'wheel:move', { x: p.x, y: p.y, wheel: this.wheelKind });
+          break;
+        }
+        // The release carries the modifiers that were held, which is how Ctrl+Shift asks the model about the screen.
+        this.send(p.displayId, 'wheel:release', {
+          x: p.x, y: p.y, wheel: this.wheelKind, ...(ev.mods === undefined ? {} : { mods: ev.mods }),
+        });
+        this.releaseMods = ev.mods ?? 0;
+        this.wheelDisplay = null;
         break;
       }
       case 'click': {
@@ -140,7 +150,8 @@ export class OverlayManager extends EventEmitter {
 
   previewPing(id: PingId): void {
     const d = screen.getPrimaryDisplay();
-    this.send(d.id, 'ping:spawn', { id, x: d.bounds.width / 2, y: d.bounds.height / 2 });
+    // `hold: false`: a preview is not a ping we placed, so the AI's deep ping must not keep its icon up.
+    this.send(d.id, 'ping:spawn', { id, x: d.bounds.width / 2, y: d.bounds.height / 2, hold: false });
   }
 
   /** A room member's ping, already mapped onto one of our displays. */
@@ -165,9 +176,26 @@ export class OverlayManager extends EventEmitter {
   }
 
   /** A line of room text (ours, with no tag, or a member's), already mapped onto one of our displays. */
-  spawnText(p: { displayId: number; x: number; y: number; text: string; owner: string; style: RoomTextStyle; tag?: PingTag }): void {
+  spawnText(p: { displayId: number; x: number; y: number; text: string; owner: string; style: RoomTextStyle; sticky?: boolean; tag?: PingTag }): void {
     const { displayId, ...line } = p;
     this.send(displayId, 'text:spawn', line);
+  }
+
+  /** Takes down every line that owner has on screen, on every display: its work is over. */
+  clearText(owner: string): void {
+    for (const id of this.windows.keys()) this.send(id, 'text:clear', { owner });
+  }
+
+  /** Takes down the ping the overlay held for the AI, on every display: the answer is in. */
+  releaseHeldPing(): void {
+    for (const id of this.windows.keys()) this.send(id, 'ping:release', null);
+  }
+
+  /** Reads and forgets the last wheel release's modifier bits: Ctrl+Shift there means the ping asks the model. */
+  takeReleaseMods(): number {
+    const mods = this.releaseMods;
+    this.releaseMods = 0;
+    return mods;
   }
 
   /** This machine's displays with their room numbers (#1 = primary). */
@@ -175,8 +203,8 @@ export class OverlayManager extends EventEmitter {
     return this.numberedList;
   }
 
-  toast(title: string, body: string): void {
-    this.send(screen.getPrimaryDisplay().id, 'toast:show', { title, body });
+  toast(title: string, body: string, ms?: number): void {
+    this.send(screen.getPrimaryDisplay().id, 'toast:show', { title, body, ...(ms === undefined ? {} : { ms }) });
   }
 
   destroy(): void {

@@ -6,6 +6,7 @@ import type { HelperStatus, WheelKind } from './protocol';
 import type { JoinResult, RoomState, RoomStateCore } from './room';
 import type { TagRgb } from './roomColors';
 import type { HistoryLine } from './roomHistory';
+import type { LaunchConfig, LaunchDraft, LaunchPickKind, LaunchProblem } from './launchItems';
 import { PEER_RE } from './roomProtocol';
 import type { OverlaySettings, RoomTextStyle, Settings } from './settings';
 import type { UpdateState } from './update';
@@ -29,31 +30,47 @@ export interface OverlayEvents {
   /** `wheel` names the wheel the gesture belongs to; missing means 'ping' (the site demo leaves it out). */
   'wheel:open': Point & { wheel?: WheelKind };
   'wheel:move': Point & { wheel?: WheelKind };
-  'wheel:release': Point & { wheel?: WheelKind };
+  /** `mods`: the modifiers held as the button came up (MOD bits), so the overlay knows Ctrl+Shift was asked for. */
+  'wheel:release': Point & { wheel?: WheelKind; mods?: number };
   'wheel:cancel': null;
-  /** `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one. */
-  'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean };
+  /**
+   * `tag` marks a ping from another room member. `keep`: our own ping that stays until 'ping:unkeep' or our next one.
+   * `hold`: keep the icon up until 'ping:release' (the AI's deep ping), which defaults to what `holdPingId` says for
+   * our own pings — and `false` on a preview, which is not something we placed.
+   */
+  'ping:spawn': Point & { id: PingId; tag?: PingTag; keep?: boolean; hold?: boolean };
   /** Removes the ping kept on this display, if any: we pinged on another display, or paused. */
   'ping:unkeep': null;
+  /** Takes down the ping the overlay held for the AI while it thought, on this display. */
+  'ping:release': null;
   /** `owner` is 'self', 'preview' or a room member: each owner has at most one emote on screen. */
   'emote:spawn': Point & { owner: string; art: EmoteArt; tag?: PingTag };
   'emote:clear': { owner: string };
-  'toast:show': { title: string; body: string };
-  /** `owner` is 'self' or a room member: each owner has at most 3 lines on screen. */
-  'text:spawn': Point & { text: string; owner: string; style: RoomTextStyle; tag?: PingTag };
+  'toast:show': { title: string; body: string; /** How long it stays, in ms; the overlay has its own default. */ ms?: number };
+  /**
+   * `owner` is 'self' or a room member: each owner has at most 3 lines on screen. `sticky` keeps a line up until
+   * `text:clear` takes it down, for something that is still running rather than a message that has been read.
+   */
+  'text:spawn': Point & { text: string; owner: string; style: RoomTextStyle; tag?: PingTag; sticky?: boolean };
+  /** Takes down every line of one owner, sticky or not. */
+  'text:clear': { owner: string };
 }
 
 export type OverlayChannel = keyof OverlayEvents;
 
 export const OVERLAY_CHANNELS: readonly OverlayChannel[] = [
-  'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'emote:spawn', 'emote:clear',
-  'toast:show', 'text:spawn',
+  'overlay:settings', 'wheel:open', 'wheel:move', 'wheel:release', 'wheel:cancel', 'ping:spawn', 'ping:unkeep', 'ping:release',
+  'emote:spawn', 'emote:clear', 'toast:show', 'text:spawn', 'text:clear',
 ];
 
 export const TEXT_CH = { submit: 'text:submit', cancel: 'text:cancel', strings: 'text:strings' } as const;
 
+/** What the one input box is open for: a line to the room, or a question for the deep ask. */
+export type TextBoxMode = 'room' | 'ask';
+
 /** The text box's words, in the language the app uses. */
 export interface TextBoxText {
+  mode: TextBoxMode;
   placeholder: string;
   /** The commands the box understands, shown under the input. */
   hint: string;
@@ -61,6 +78,8 @@ export interface TextBoxText {
   unknown: string;
   /** Shown instead of the hint for a vote command while votes are switched off. */
   votesOff: string;
+  /** How many code points the box takes: room text and a question for DeepSeek have their own limits. */
+  max: number;
 }
 
 /** What the app made of a submit: 'sent' closes the box, the others keep it open with a hint. */
@@ -75,7 +94,7 @@ export interface TextApi {
 
 export const PANEL_CH = { state: 'panel:state', action: 'panel:action' } as const;
 
-/** Everything a panel window draws. The roster and the vote widget get the same shape, so one message feeds either. */
+/** Everything a room panel window draws. The roster and the vote widget get the same shape, so one message feeds either. */
 export interface PanelState {
   view: 'roster' | 'vote';
   lang: Lang;
@@ -93,17 +112,31 @@ export interface PanelState {
   volume: number;
 }
 
+/** The countdown card the retreat ping starts: a number, and the way out of it. */
+export interface CountdownState {
+  view: 'countdown';
+  lang: Lang;
+  /** Seconds left, counting down to the shutdown. */
+  secondsLeft: number;
+  /** The pause shortcut as the user set it, for the hint line. */
+  hotkey: string;
+}
+
+/** What a panel window receives: the room's panels, or the shutdown countdown. */
+export type PanelMessage = PanelState | CountdownState;
+
 /** What a click in a panel window asks for. An `alive` line is placed at the cursor by the app, not by the page. */
 export type PanelAction =
   | { t: 'alive'; peer: string }
   | { t: 'mute'; peer: string; on: boolean }
   | { t: 'kick'; peer: string }
   | { t: 'vote'; kind: 'ff' | 'ready' }
-  | { t: 'ballot'; yes: boolean };
+  | { t: 'ballot'; yes: boolean }
+  | { t: 'cancelShutdown' };
 
 export interface PanelApi {
   /** Calls `cb` with every state the main process sends; returns the way to stop. */
-  on(cb: (state: PanelState) => void): () => void;
+  on(cb: (state: PanelMessage) => void): () => void;
   act(action: PanelAction): void;
 }
 
@@ -124,6 +157,8 @@ export function parsePanelAction(raw: unknown): PanelAction | null {
       return a.kind === 'ff' || a.kind === 'ready' ? { t: 'vote', kind: a.kind } : null;
     case 'ballot':
       return typeof a.yes === 'boolean' ? { t: 'ballot', yes: a.yes } : null;
+    case 'cancelShutdown':
+      return { t: 'cancelShutdown' };
     default:
       return null;
   }
@@ -208,4 +243,12 @@ export interface SettingsApi {
   startUpdate(): Promise<void>;
   /** Opens the release notes of the version that was found, or else the page of the latest release. */
   openReleasePage(): Promise<void>;
+  /** The request gather workspace: what the Assist Me ping opens. */
+  getLaunch(): Promise<LaunchConfig>;
+  /** Saves it. The app normalises what it stores and returns that. */
+  setLaunch(config: LaunchConfig): Promise<LaunchConfig>;
+  /** Field-level problems for a draft, checked before it is saved. */
+  checkLaunch(draft: LaunchDraft): Promise<LaunchProblem[]>;
+  /** Opens the OS picker for a file, folder or program; null when it was cancelled. */
+  pickLaunchPath(kind: LaunchPickKind): Promise<string | null>;
 }

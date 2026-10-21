@@ -57,6 +57,8 @@ struct Emit {
   WheelKind wheel = WheelKind::Ping;  // point events only: the wheel whose trigger started the gesture
   bool enabled = false;               // Toggled only
   bool show = false;                  // Panel only
+  // WheelRelease only: the modifiers held as the button came up, as Mod* bits. The app reads Ctrl+Shift there.
+  uint32_t mods = 0;
 };
 
 enum class InjectKind { ButtonDown, ButtonUp, KeyDown, KeyUp };

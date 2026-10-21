@@ -112,6 +112,24 @@ describe('TextStage', () => {
     expect(layer.children).toHaveLength(2);
   });
 
+  it('keeps a sticky line up until it is cleared, however long that takes', () => {
+    stage.spawn(line({ text: 'thinking', sticky: true }));
+    expect(layer.children).toHaveLength(1);
+    expect(layer.children[0].style['--dur']).toBe('3600000ms');
+    vi.advanceTimersByTime(10 * 60 * 1000);
+    expect(layer.children).toHaveLength(1);
+    stage.clear('a');
+    expect(layer.children).toHaveLength(0);
+  });
+
+  it('clears every line of one owner, on screen or still waiting, and leaves the others', () => {
+    stage.spawn(line({ text: 'ours' }));
+    stage.spawn(line({ text: 'waiting', style: 'danmaku' }));
+    stage.spawn(line({ text: 'theirs', owner: 'b' }));
+    stage.clear('a');
+    expect(layer.children.map((c) => c.children[0].textContent)).toEqual(['theirs']);
+  });
+
   it('takes a 弹幕 line down once it has crossed the screen', () => {
     stage.spawn(line({ style: 'danmaku' }));
     expect(layer.children).toHaveLength(1);

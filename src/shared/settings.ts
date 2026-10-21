@@ -3,6 +3,7 @@ import {
   CUSTOM_NAME_MAX, MAX_CUSTOM_EMOTES, customHash, isCustomRef, isEmoteFx, normalizeClickEmote, normalizeEmoteWheel,
   type CustomEmote, type EmoteRef,
 } from './emotes';
+import { AI_DEEP_PING } from './aiAsk';
 import { DEFAULT_FEATURES, normalizeFeatures, type Features } from './features';
 import { WHEEL } from './geometry';
 import { LANGUAGE_PREFS, strings, type Lang, type LanguagePref } from './i18n';
@@ -89,6 +90,11 @@ export interface Settings {
   features: Features;
   /** How room text appears here: a bubble at the spot the sender pointed at, or a line scrolling across the top. */
   roomTextStyle: RoomTextStyle;
+  /** The question ping asks DeepSeek about a screenshot of the display it was placed on. Off: it is a plain ping. */
+  aiAsk: boolean;  /** The DeepSeek API key `aiAsk` sends with, or '' for none. Kept in this computer's settings file. */
+  deepseekKey: string;
+  /** Windows only: the retreat ping starts a five-second countdown and then shuts this PC down. */
+  shutdownOnDanger: boolean;
 }
 
 /** Per-machine defaults for the room profile: the OS username and a random tag colour. */
@@ -138,6 +144,9 @@ export const DEFAULT_SETTINGS: Settings = {
   updateNotifiedVersion: null,
   features: { ...DEFAULT_FEATURES },
   roomTextStyle: 'spot',
+  aiAsk: true,
+  deepseekKey: '',
+  shutdownOnDanger: true,
 };
 
 export const LIMITS = {
@@ -152,7 +161,7 @@ export const LIMITS = {
 
 type NumKey = keyof typeof LIMITS;
 type BoolKey = 'enabledOnStart' | 'clickPing' | 'gameCheck' | 'keepLastPing' | 'muted' | 'tickSound' | 'launchAtStartup' | 'allowInternet' | 'rejoinRoom' | 'roomMuted'
-  | 'emoteClick' | 'emoteSound' | 'friendEmotes' | 'autoUpdateCheck';
+  | 'emoteClick' | 'emoteSound' | 'friendEmotes' | 'autoUpdateCheck' | 'aiAsk' | 'shutdownOnDanger';
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isVk = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 254;
@@ -264,6 +273,12 @@ function roomCode(raw: unknown): string | null {
   return parsed.ok ? parsed.code : null;
 }
 
+/** A DeepSeek API key as it can be stored: trimmed, and only the characters such a key is made of. */
+function apiKey(raw: unknown): string {
+  if (typeof raw !== 'string') return DEFAULT_SETTINGS.deepseekKey;
+  return raw.trim().slice(0, 128).replace(/[^A-Za-z0-9_-]/g, '');
+}
+
 /** Valid entries only, rebuilt field by field: well-formed unique ids, boolean flags, a safe name; the first MAX_CUSTOM_EMOTES. */
 function customEmotes(raw: unknown): CustomEmote[] {
   if (!Array.isArray(raw)) return [];
@@ -340,6 +355,9 @@ export function normalizeSettings(raw: unknown, platform: Platform = 'win', iden
     updateNotifiedVersion: isVersion(r.updateNotifiedVersion) ? r.updateNotifiedVersion : null,
     features: normalizeFeatures(r.features),
     roomTextStyle: r.roomTextStyle === 'danmaku' ? 'danmaku' : 'spot',
+    aiAsk: bool(r.aiAsk, 'aiAsk'),
+    deepseekKey: apiKey(r.deepseekKey),
+    shutdownOnDanger: bool(r.shutdownOnDanger, 'shutdownOnDanger'),
   };
 }
 
@@ -375,7 +393,13 @@ export type OverlaySettings = Pick<
   Settings,
   'pingSizePx' | 'pingDurationS' | 'keepLastPing' | 'volume' | 'muted' | 'tickSound' | 'wheelSizePx' | 'wheel' | 'clickPingId'
   | 'emoteWheel' | 'clickEmoteId' | 'emoteSizePx' | 'emoteSound' | 'customEmotes'
->;
+> & {
+  /**
+   * The ping the overlay keeps on screen until it is told otherwise: the AI's deep ping, whose thinking outlasts the
+   * ping's own animation. Null when the AI setting is off.
+   */
+  holdPingId: PingId | null;
+};
 
 /** How loud lolPing's sounds play, 0 to 1: the volume setting, or 0 when muted. */
 export const soundLevel = (s: Pick<Settings, 'volume' | 'muted'>): number => (s.muted ? 0 : s.volume / 100);
@@ -385,4 +409,5 @@ export const overlaySettings = (s: Settings): OverlaySettings => ({
   wheelSizePx: s.wheelSizePx, wheel: [...s.wheel], clickPingId: s.clickPingId,
   emoteWheel: [...s.emoteWheel], clickEmoteId: s.clickEmoteId, emoteSizePx: s.emoteSizePx, emoteSound: s.emoteSound,
   customEmotes: s.customEmotes.map((c) => ({ ...c })),
+  holdPingId: s.aiAsk && s.deepseekKey !== '' ? AI_DEEP_PING : null,
 });

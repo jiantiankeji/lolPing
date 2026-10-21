@@ -94,3 +94,4 @@ Creating an active tap needs Accessibility. If `CGEventTapCreate` returns `NULL`
 - Accessibility must be granted again after every update (ad-hoc signatures change with each build).
 - Windows of apps running with elevated privileges and the login window can't be pinged over; some full-screen games draw above the overlay.
 - Single-window screen sharing doesn't include the pings.
+- The question mark's screenshot needs the Screen Recording permission, which macOS asks for the first time. Denied, the ping only reports that the screenshot failed.

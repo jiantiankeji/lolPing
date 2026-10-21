@@ -1,4 +1,4 @@
-import { globalShortcut, ipcMain, shell } from 'electron';
+import { dialog, globalShortcut, ipcMain, shell } from 'electron';
 import { isCustomRef, isEmoteFx, isEmoteRefShape, type CustomEmote, type EmoteRef, type ImportResult, type SoundResult } from '../shared/emotes';
 import type { Strings } from '../shared/i18n';
 import { SETTINGS_CH, type About, type AppStatus, type SetSettingsResult } from '../shared/ipc';
@@ -9,6 +9,8 @@ import type { JoinResult, RoomState } from '../shared/room';
 import { panelKeyClashes, patchClashes, rendererPatch } from '../shared/settings';
 import type { UpdateState } from '../shared/update';
 import { emoteFileFrom, type EmoteLibrary } from './emoteLibrary';
+import { checkLaunchDraft } from './launchCheck';
+import type { LaunchStore } from './launchStore';
 import type { SettingsStore } from './settingsStore';
 
 const PROJECT_URL = 'https://github.com/darrenprx/lolPing';
@@ -17,6 +19,8 @@ export const LATEST_RELEASE_URL = `${PROJECT_URL}/releases/latest`;
 
 export interface SettingsIpcDeps {
   store: SettingsStore;
+  /** The request gather workspace: the list the Assist Me ping opens. */
+  launch: LaunchStore;
   /** Imported emotes' files. Only the import, remove, sound and fx handlers change `customEmotes`. */
   library: EmoteLibrary;
   getStatus(): AppStatus;
@@ -140,6 +144,18 @@ export function registerSettingsIpc(d: SettingsIpcDeps): void {
     d.store.update({ customEmotes: d.store.get().customEmotes.map((c) => (c.id === id ? { ...c, fx } : c)) });
   });
   ipcMain.handle(SETTINGS_CH.about, () => d.about());
+  ipcMain.handle(SETTINGS_CH.launchGet, () => d.launch.get());
+  ipcMain.handle(SETTINGS_CH.launchSet, (_e, raw: unknown) => d.launch.set(raw));
+  ipcMain.handle(SETTINGS_CH.launchCheck, (_e, raw: unknown) => checkLaunchDraft(raw));
+  ipcMain.handle(SETTINGS_CH.launchPick, async (_e, kind: unknown): Promise<string | null> => {
+    // The page only says what kind of thing it wants; the OS shows the picker.
+    const which = kind === 'folder' ? 'folder' : kind === 'program' ? 'program' : 'file';
+    const picked = await dialog.showOpenDialog({
+      properties: [which === 'folder' ? 'openDirectory' : 'openFile'],
+      ...(which === 'program' ? { filters: [{ name: 'Programs', extensions: ['exe', 'cmd', 'bat', 'com', 'app', 'sh'] }] } : {}),
+    });
+    return picked.canceled ? null : (picked.filePaths[0] ?? null);
+  });
   ipcMain.handle(SETTINGS_CH.openFolder, async () => {
     await shell.openPath(d.store.dir);
   });

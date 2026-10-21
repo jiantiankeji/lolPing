@@ -3,6 +3,7 @@ import {
   ArrowMove24Regular, ArrowSync24Regular, CursorClick24Regular, DataPie24Regular, Games24Regular, Info24Regular, Keyboard24Regular, MusicNote224Regular, Pin24Regular,
   Power24Regular, ResizeLarge24Regular, Rocket24Regular, Settings24Regular, Speaker224Regular, SpeakerMute24Regular,
   Apps24Regular, Timer24Regular, Cursor24Regular, Emoji24Regular, LocalLanguage24Regular, PeopleCommunity24Regular,
+  Sparkle24Regular, Flash24Regular,
 } from '@fluentui/react-icons';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { LANGUAGE_NAMES, LANGUAGE_PREFS, resolveLang, strings, type LanguagePref, type Strings } from '../../shared/i18n';
@@ -14,9 +15,11 @@ import { triggerLabel, type Settings } from '../../shared/settings';
 import type { WheelPatch } from '../../shared/wheelLayout';
 import { api } from './api';
 import { AboutSection } from './components/AboutSection';
+import { AiSection } from './components/AiSection';
 import { EmoteSection } from './components/EmoteSection';
 import { FeaturesSection } from './components/FeaturesSection';
 import { KeyCapture } from './components/KeyCapture';
+import { LaunchSection } from './components/LaunchSection';
 import { PermissionCard } from './components/PermissionCard';
 import { RoomSection } from './components/RoomSection';
 import { SettingRow, SliderRow, SwitchRow } from './components/rows';
@@ -41,11 +44,13 @@ const SECTIONS: { id: string; label: (t: Strings) => string; icon: ReactNode; fe
   { id: 'emotes', label: (t) => t.navEmotes, icon: <Emoji24Regular />, feature: 'emotes' },
   { id: 'room', label: (t) => t.navRoom, icon: <PeopleCommunity24Regular />, feature: 'rooms' },
   { id: 'features', label: (t) => t.navFeatures, icon: <Apps24Regular /> },
+  { id: 'launch', label: (t) => t.navLaunch, icon: <Flash24Regular /> },
+  { id: 'ai', label: (t) => t.navAi, icon: <Sparkle24Regular /> },
   { id: 'app', label: (t) => t.navApp, icon: <Settings24Regular /> },
 ];
 
 /** Pings that aren't in League's default wheel layout get a "new" badge. */
-const NEW_PINGS = new Set<PingId>(['bait', 'visioncleared', 'missingflip']);
+const NEW_PINGS = new Set<PingId>(['bait', 'visioncleared', 'missingflip', 'ask']);
 
 /** The settings change for a ping wheel edit: only the fields it touches, since an undefined field would reset that setting. */
 function pingPatch(p: WheelPatch<PingId>): Partial<Settings> {
@@ -200,6 +205,10 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
         <SwitchRow icon={<SpeakerMute24Regular />} title={t.mute} checked={s.muted} onChange={(v) => void update({ muted: v })} />
         <SwitchRow icon={<MusicNote224Regular />} title={t.tickSound} description={t.tickSoundDesc}
           checked={s.tickSound} onChange={(v) => void update({ tickSound: v })} />
+        {PLATFORM === 'win' ? ( // the shutdown command is Windows' own
+          <SwitchRow icon={<Power24Regular />} title={t.shutdownOnDanger} description={t.shutdownOnDangerDesc}
+            checked={s.shutdownOnDanger} onChange={(v) => void update({ shutdownOnDanger: v })} />
+        ) : null}
 
         <div className="section" id="wheel">{t.navWheel}</div>
         <SliderRow limit="wheelSizePx" icon={<ResizeLarge24Regular />} title={t.wheelSize} description={t.wheelSizeDesc}
@@ -225,6 +234,12 @@ function SettingsPage({ settings: s, status, update }: { settings: Settings; sta
 
         <div className="section" id="features">{t.navFeatures}</div>
         <FeaturesSection settings={s} update={update} />
+
+        <div className="section" id="launch">{t.navLaunch}</div>
+        <LaunchSection />
+
+        <div className="section" id="ai">{t.navAi}</div>
+        <AiSection settings={s} update={update} />
 
         <div className="section" id="app">{t.navApp}</div>
         <SwitchRow icon={<Rocket24Regular />} title={t.launchAtStartup} description={t.launchAtStartupDesc}

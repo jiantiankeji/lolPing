@@ -10,7 +10,14 @@ export type WheelKind = 'ping' | 'emote';
  */
 export type HelperEvent =
   | { type: 'ready'; version: number }
-  | { type: 'wheelOpen' | 'wheelMove' | 'wheelRelease' | 'click'; x: number; y: number; wheel: WheelKind }
+  | {
+      type: 'wheelOpen' | 'wheelMove' | 'wheelRelease' | 'click';
+      x: number;
+      y: number;
+      wheel: WheelKind;
+      /** A release's modifier bits (MOD in keys.ts): Ctrl+Shift on a release means "ask the model". */
+      mods?: number;
+    }
   | { type: 'cancel' }
   | { type: 'toggled'; enabled: boolean }
   | { type: 'textRequested' }
@@ -27,6 +34,8 @@ export const HELPER_EXIT_NO_ACCESS = 3;
 type PointType = 'wheelOpen' | 'wheelMove' | 'wheelRelease' | 'click';
 const POINT_TYPES = new Set<string>(['wheelOpen', 'wheelMove', 'wheelRelease', 'click']);
 const isInt = (x: unknown): x is number => Number.isInteger(x);
+/** The MOD bits: Ctrl, Alt, Shift and Win, so 0 to 15. */
+const isMods = (x: unknown): x is number => Number.isInteger(x) && (x as number) >= 0 && (x as number) <= 15;
 
 export function parseHelperLine(line: string): HelperEvent | null {
   let v: unknown;
@@ -58,7 +67,11 @@ export function parseHelperLine(line: string): HelperEvent | null {
     default:
       if (typeof o.type === 'string' && POINT_TYPES.has(o.type) && isInt(o.x) && isInt(o.y)) {
         // Anything but "emote" (including no field, from a version 1 helper) is the ping wheel.
-        return { type: o.type as PointType, x: o.x, y: o.y, wheel: o.wheel === 'emote' ? 'emote' : 'ping' };
+        const mods = isMods(o.mods) ? o.mods : undefined;
+        return {
+          type: o.type as PointType, x: o.x, y: o.y, wheel: o.wheel === 'emote' ? 'emote' : 'ping',
+          ...(mods === undefined ? {} : { mods }),
+        };
       }
       return null;
   }
@@ -93,12 +106,13 @@ export type HelperCommand =
 
 /**
  * `live.text` and `live.panel` are false outside a room: a key code of 0 tells the helper to leave that key
- * (the text shortcut, the panel key) to other apps.
+ * (the text shortcut, the panel key) to other apps. `live.panelVk` replaces the panel key's code: the shutdown
+ * countdown borrows that channel to hold Esc for its five seconds.
  */
 export function configCommand(
   s: Settings,
   enabled: boolean,
-  live: { text: boolean; panel: boolean } = { text: false, panel: false },
+  live: { text: boolean; panel: boolean; panelVk?: number } = { text: false, panel: false },
 ): HelperCommand {
   const t = s.trigger;
   // With the Emotes feature off the helper gets no emote key, so no emote wheel or emote click.
@@ -117,7 +131,7 @@ export function configCommand(
     toggleVk: s.toggleHotkey.vk,
     textMods: s.textHotkey.mods,
     textVk: live.text ? s.textHotkey.vk : 0,
-    panelVk: live.panel ? s.panelKey : 0,
+    panelVk: live.panelVk ?? (live.panel ? s.panelKey : 0),
     enabled,
   };
 }

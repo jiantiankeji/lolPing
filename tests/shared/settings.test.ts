@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { AI_DEEP_PING } from '../../src/shared/aiAsk';
 import { DEFAULT_CLICK_EMOTE, DEFAULT_EMOTE_WHEEL } from '../../src/shared/emoteCatalog';
 import { MOD } from '../../src/shared/keys';
 import { formatRoomCode, makeRoomCode } from '../../src/shared/roomCode';
@@ -63,6 +64,31 @@ describe('normalizeSettings', () => {
     expect(DEFAULT_SETTINGS.panelKey).toBe(0x09);
     expect(normalizeSettings({}).panelKey).toBe(0x09);
     expect(normalizeSettings({ version: 1, volume: 50 }).panelKey).toBe(0x09);
+  });
+
+  it('has the question ping asking DeepSeek from the start, with an empty key until one is typed', () => {
+    expect(DEFAULT_SETTINGS.aiAsk).toBe(true);
+    expect(normalizeSettings({}).aiAsk).toBe(true);
+    expect(normalizeSettings({}).deepseekKey).toBe('');
+    expect(normalizeSettings({ aiAsk: false }).aiAsk).toBe(false);
+    // A malformed value falls back to the default, which is on.
+    expect(normalizeSettings({ aiAsk: 'yes' }).aiAsk).toBe(true);
+  });
+
+  it('keeps only the characters an API key is made of', () => {
+    expect(normalizeSettings({ deepseekKey: '  sk-test-123 \n' }).deepseekKey).toBe('sk-test-123');
+    expect(normalizeSettings({ deepseekKey: 'sk-a b\tc' }).deepseekKey).toBe('sk-abc');
+    expect(normalizeSettings({ deepseekKey: 42 }).deepseekKey).toBe('');
+    expect(normalizeSettings({ deepseekKey: `sk-${'x'.repeat(400)}` }).deepseekKey).toHaveLength(128);
+  });
+
+  it('arms the retreat shutdown from the start, and an old settings file arms it too', () => {
+    expect(DEFAULT_SETTINGS.shutdownOnDanger).toBe(true);
+    expect(normalizeSettings({}).shutdownOnDanger).toBe(true);
+    // A file written before the setting existed gets the default: that is what turns it on after an update.
+    expect(normalizeSettings({ version: 1, volume: 40 }).shutdownOnDanger).toBe(true);
+    expect(normalizeSettings({ shutdownOnDanger: false }).shutdownOnDanger).toBe(false);
+    expect(normalizeSettings({ shutdownOnDanger: 'yes' }).shutdownOnDanger).toBe(true);
   });
 
   it('keeps a plain key as the panel key', () => {
@@ -524,7 +550,16 @@ describe('helpers', () => {
       pingSizePx: 110, pingDurationS: 3.2, keepLastPing: false, volume: 70, muted: false, tickSound: true,
       wheelSizePx: 600, wheel: ['danger', 'push', 'omw', 'allin', 'assist', 'needvision', 'missing', 'enemyvision'], clickPingId: 'generic',
       emoteWheel: [...DEFAULT_EMOTE_WHEEL], clickEmoteId: DEFAULT_CLICK_EMOTE, emoteSizePx: 150, emoteSound: true, customEmotes: [],
+      holdPingId: null, // no key in the defaults, so nothing is held until one is set
     });
+  });
+
+  it('tells the overlay which ping to hold while the AI thinks', () => {
+    // Only a setup that can actually ask holds the icon: no key means no answer to wait for.
+    const ready = normalizeSettings({ aiAsk: true, deepseekKey: 'sk-test' });
+    expect(overlaySettings(ready).holdPingId).toBe(AI_DEEP_PING);
+    expect(overlaySettings(normalizeSettings({ aiAsk: false, deepseekKey: 'sk-test' })).holdPingId).toBeNull();
+    expect(overlaySettings(normalizeSettings({ aiAsk: true, deepseekKey: '' })).holdPingId).toBeNull();
   });
 
   it('overlaySettings carries the emote fields', () => {

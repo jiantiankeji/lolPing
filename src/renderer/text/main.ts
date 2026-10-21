@@ -4,8 +4,8 @@ import { MAX_TEXT } from '../../shared/roomProtocol';
 const input = document.getElementById('message') as HTMLInputElement;
 const count = document.getElementById('count') as HTMLElement;
 const hint = document.getElementById('hint') as HTMLElement;
-/** The counter shows in the last 20 code points. */
-const COUNT_FROM = MAX_TEXT - 20;
+/** How many code points the box takes: room text and a question for DeepSeek have their own limits. */
+let limit = MAX_TEXT;
 let words: TextBoxText | null = null;
 
 const showHint = (message: string, warn: boolean): void => {
@@ -16,11 +16,11 @@ const showHint = (message: string, warn: boolean): void => {
 /** A code point is one letter, one Chinese character or one emoji, however many UTF-16 units it takes. */
 function clamp(): void {
   const points = [...input.value];
-  if (points.length > MAX_TEXT) input.value = points.slice(0, MAX_TEXT).join('');
-  const used = Math.min(points.length, MAX_TEXT);
-  count.hidden = used < COUNT_FROM;
-  count.textContent = `${used}/${MAX_TEXT}`;
-  count.classList.toggle('full', used >= MAX_TEXT);
+  if (points.length > limit) input.value = points.slice(0, limit).join('');
+  const used = Math.min(points.length, limit);
+  count.hidden = used < Math.max(0, limit - 20);
+  count.textContent = `${used}/${limit}`;
+  count.classList.toggle('full', used >= limit);
 }
 
 /** A held Enter repeats faster than the answer comes back: one submit at a time, or the text would be sent twice. */
@@ -65,7 +65,9 @@ input.addEventListener('keydown', (event) => {
 void window.textApi.strings().then((t) => {
   if (!t) return;
   words = t;
+  limit = t.max;
   input.placeholder = t.placeholder;
   showHint(t.hint, false);
+  clamp();
 });
 requestAnimationFrame(() => input.focus());

@@ -44,6 +44,10 @@ const api: SettingsApi = {
   checkForUpdates: () => ipcRenderer.invoke(SETTINGS_CH.updateCheck),
   startUpdate: () => ipcRenderer.invoke(SETTINGS_CH.updateStart),
   openReleasePage: () => ipcRenderer.invoke(SETTINGS_CH.updateOpenRelease),
+  getLaunch: () => ipcRenderer.invoke(SETTINGS_CH.launchGet),
+  setLaunch: (config) => ipcRenderer.invoke(SETTINGS_CH.launchSet, config),
+  checkLaunch: (draft) => ipcRenderer.invoke(SETTINGS_CH.launchCheck, draft),
+  pickLaunchPath: (kind) => ipcRenderer.invoke(SETTINGS_CH.launchPick, kind),
 };
 
 contextBridge.exposeInMainWorld('settingsApi', api);

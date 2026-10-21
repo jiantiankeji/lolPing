@@ -1,5 +1,5 @@
 import { BrowserWindow, ipcMain, screen } from 'electron';
-import { TEXT_CH, type Point, type TextAnswer, type TextBoxText } from '../shared/ipc';
+import { TEXT_CH, type Point, type TextAnswer, type TextBoxMode, type TextBoxText } from '../shared/ipc';
 import { placeInside } from './coords';
 import { IS_MAC, loadPage, pageUrl, preloadPath } from './paths';
 
@@ -12,7 +12,7 @@ const FOCUS_WAIT_MS = 2000;
 let win: BrowserWindow | null = null;
 let at: Point = { x: 0, y: 0 };
 let text: TextBoxText | null = null;
-let submit: ((raw: string, at: Point) => TextAnswer) | null = null;
+let submit: ((raw: string, at: Point, mode: TextBoxMode) => TextAnswer) | null = null;
 const goneListeners: Array<() => void> = [];
 
 export function onTextWindowGone(cb: () => void): void {
@@ -24,12 +24,13 @@ export function closeTextWindow(): void {
   if (win && !win.isDestroyed()) win.close();
 }
 
-/** `onSubmit` answers what the box typed: 'sent' closes it, anything else keeps it open with that hint. */
-export function registerTextWindow(onSubmit: (raw: string, at: Point) => TextAnswer): void {
+/** `onSubmit` answers what the box typed: 'sent' closes it, anything else keeps it open with that hint. `mode` says what
+ * the box was opened for, so the same window can carry a room line or a question for the deep ask. */
+export function registerTextWindow(onSubmit: (raw: string, at: Point, mode: TextBoxMode) => TextAnswer): void {
   submit = onSubmit;
   ipcMain.handle(TEXT_CH.submit, (event, raw: unknown): TextAnswer => {
-    if (win?.webContents !== event.sender || typeof raw !== 'string' || !submit) return 'unknown';
-    const answer = submit(raw, at);
+    if (win?.webContents !== event.sender || typeof raw !== 'string' || !submit || !text) return 'unknown';
+    const answer = submit(raw, at, text.mode);
     if (answer === 'sent') win.close();
     return answer;
   });

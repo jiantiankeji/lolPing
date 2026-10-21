@@ -1012,6 +1012,54 @@ static void test_both_triggers_held_pass_through() {
   CHECK(!r.swallow && r.injects.empty());
 }
 
+static void test_ctrl_shift_with_alt_opens_the_ping_wheel() {
+  // Ctrl+Shift is the chord for asking the model about a screenshot. With Alt down as well, the emote wheel bows out
+  // so the ping wheel opens, instead of the two triggers cancelling each other as they do for plain Ctrl+Alt.
+  Decision d = withEmote();
+  d.onEvent(kd(ALT));
+  d.onEvent(kd(CTRL));
+  d.onEvent(kd(0xA0));  // left Shift
+  Result r = d.onEvent(md(Btn::Left, 100, 100));
+  CHECK(r.swallow);
+  CHECK(d.state() == S::Pending);
+  r = d.onEvent(mv(140, 100));
+  CHECK(emitIs(findEmit(r, Emit::Kind::WheelOpen), WheelKind::Ping));
+}
+
+static void test_release_reports_the_modifiers_held() {
+  Decision d = withEmote();
+  d.onEvent(kd(ALT));
+  d.onEvent(kd(CTRL));
+  d.onEvent(kd(0xA0));
+  d.onEvent(md(Btn::Left, 100, 100));
+  d.onEvent(mv(140, 100));
+  const Emit* rel = findEmit(d.onEvent(mu(Btn::Left, 140, 100)), Emit::Kind::WheelRelease);
+  CHECK(rel != nullptr);
+  CHECK((rel->mods & (ModCtrl | ModShift)) == (ModCtrl | ModShift));
+  CHECK((rel->mods & ModAlt) != 0);  // the trigger itself is held too, and reported as it is
+}
+
+static void test_release_without_modifiers_reports_none() {
+  Decision d;
+  d.onEvent(kd(ALT));
+  d.onEvent(md(Btn::Left, 100, 100));
+  d.onEvent(mv(140, 100));
+  const Emit* rel = findEmit(d.onEvent(mu(Btn::Left, 140, 100)), Emit::Kind::WheelRelease);
+  CHECK(rel != nullptr);
+  CHECK((rel->mods & (ModCtrl | ModShift)) == 0);
+}
+
+static void test_ctrl_shift_without_alt_is_still_the_emote_wheel() {
+  // Shift only lends Ctrl its meaning while the ping trigger is held: on its own, Ctrl+Shift stays the emote wheel.
+  Decision d = withEmote();
+  d.onEvent(kd(CTRL));
+  d.onEvent(kd(0xA0));
+  Result r = d.onEvent(md(Btn::Left, 100, 100));
+  CHECK(r.swallow);
+  r = d.onEvent(mv(140, 100));
+  CHECK(emitIs(findEmit(r, Emit::Kind::WheelOpen), WheelKind::Emote));
+}
+
 static void test_emote_click_on_and_off() {
   {
     Decision d = withEmote(Trigger::Ctrl, 0, true);
@@ -1210,7 +1258,7 @@ static void test_json_parses_flat_objects() {
   std::map<std::string, std::string> m;
   CHECK(parseFlatJson(R"({"type":"config","enabled":true,"dragThresholdPx":8,"trigger":"alt"})", m));
   CHECK(m["type"] == "config" && m["enabled"] == "true" && m["dragThresholdPx"] == "8" && m["trigger"] == "alt");
-  CHECK(parseFlatJson(R"( { "msg" : "a\"b\\c" } )", m) && m["msg"] == "a\"b\\c");
+  CHECK(parseFlatJson("{ \"msg\" : \"a\\\"b\\\\c\" }", m) && m["msg"] == "a\"b\\c");
   CHECK(parseFlatJson("{}", m) && m.empty());
 }
 
@@ -1436,6 +1484,10 @@ int main() {
   test_ctrl_drag_opens_emote_wheel();
   test_alt_drag_is_still_the_ping_wheel();
   test_both_triggers_held_pass_through();
+  test_ctrl_shift_with_alt_opens_the_ping_wheel();
+  test_release_reports_the_modifiers_held();
+  test_release_without_modifiers_reports_none();
+  test_ctrl_shift_without_alt_is_still_the_emote_wheel();
   test_emote_click_on_and_off();
   test_escape_and_right_click_cancel_emote_gesture();
   test_emote_trigger_none_ignores_ctrl_drag();

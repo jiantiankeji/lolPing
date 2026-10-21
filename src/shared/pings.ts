@@ -1,6 +1,6 @@
 export type PingId =
   | 'danger' | 'push' | 'omw' | 'allin' | 'assist' | 'needvision' | 'missing' | 'enemyvision' | 'generic'
-  | 'bait' | 'visioncleared' | 'missingflip';
+  | 'bait' | 'visioncleared' | 'missingflip' | 'ask';
 
 export interface PingDef {
   id: PingId;
@@ -31,6 +31,9 @@ export const ALL_PINGS: readonly PingDef[] = [
   { id: 'visioncleared', name: 'Vision Cleared', icon: 'pingwheel_visionclearedrender', art: ['pingwheel_visionclearedrender'], sound: 'SRP_6', color: '#2b80ff' },
   // Not a League ping: Enemy Missing turned upside down ("¿"), asked for in #24. Older room peers drop it.
   { id: 'missingflip', name: 'Upside-down Missing', icon: 'enemy_missing_flipped', art: ['enemy_missing_flipped'], sound: 'MIA', color: '#f2c518' },
+  // The question mark, with Enemy Missing's art. Placing it asks DeepSeek about a screenshot when that is switched on;
+  // like missingflip it is a ping older room peers drop.
+  { id: 'ask', name: 'Question', icon: 'png_enemymissing_128x128', art: ['png_enemymissing_128x128'], sound: 'MIA', color: '#f2c518' },
 ];
 
 /** The wheel as League ships it, top (N) then clockwise. Array index = slice index from pickSlice(). */

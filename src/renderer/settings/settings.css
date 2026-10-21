@@ -155,6 +155,16 @@ main.content { overflow: auto; padding: 4px 28px 28px 20px; }
 .card.update.failed .icon { color: #ff9c48; }
 .updateBar { margin-top: 4px; }
 
+/* ---------- request gather: the list the Assist Me ping opens ---------- */
+.launch-bar { display: flex; align-items: center; gap: 10px; margin: 2px 0 8px; }
+.launch-row { cursor: grab; }
+.launch-row.dragging { opacity: .45; }
+.launch-row .lbl b { display: block; }
+.launch-row .lbl .desc { overflow-wrap: anywhere; }
+.launch-target { display: flex; align-items: center; gap: 8px; }
+.launch-target .fui-Input { flex: 1; min-width: 0; }
+.launch-form { display: flex; flex-direction: column; gap: 12px; min-width: 420px; }
+
 /* Linux uses native window decorations and the desktop font. */
 [data-platform="linux"] .app { grid-template-rows: 1fr; }
 [data-platform="linux"] .titlebar { display: none; }

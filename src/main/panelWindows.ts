@@ -1,23 +1,26 @@
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import { EventEmitter } from 'node:events';
-import { PANEL_CH, parsePanelAction, type PanelAction, type PanelState } from '../shared/ipc';
+import {
+  PANEL_CH, parsePanelAction, type CountdownState, type PanelAction, type PanelMessage, type PanelState,
+} from '../shared/ipc';
 import type { Rect } from './coords';
 import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from './paths';
-import { centredIn, ROSTER_SIZE, votePlacement } from './panelPlacement';
+import { centredIn, COUNTDOWN_SIZE, ROSTER_SIZE, votePlacement } from './panelPlacement';
 
-type View = PanelState['view'];
+type View = PanelMessage['view'];
 
-/** What each window may ask for: the vote widget only answers, the roster does the rest. */
+/** What each window may ask for: the vote widget only answers, the roster does the rest, the countdown has one button. */
 const ALLOWED: Record<View, ReadonlySet<PanelAction['t']>> = {
   vote: new Set(['ballot']),
   roster: new Set(['alive', 'mute', 'kick', 'vote']),
+  countdown: new Set(['cancelShutdown']),
 };
 
 interface Slot {
   win: BrowserWindow | null;
   loaded: boolean;
   /** The latest state; sent as soon as the page has loaded, and again by `update`. */
-  state: PanelState | null;
+  state: PanelMessage | null;
   /** The window should be on screen: it shows once its page has loaded. */
   shown: boolean;
 }
@@ -25,12 +28,12 @@ interface Slot {
 const emptySlot = (): Slot => ({ win: null, loaded: false, state: null, shown: false });
 
 /**
- * The roster and the vote widget: two small windows that take clicks without taking focus, so the game or editor
- * underneath keeps the keyboard. Each is created when first shown and kept hidden after that.
+ * The roster, the vote widget and the shutdown countdown: small windows that take clicks without taking focus, so the
+ * game or editor underneath keeps the keyboard. Each is created when first shown and kept hidden after that.
  * Emits 'action' with a validated PanelAction.
  */
 export class PanelWindows extends EventEmitter {
-  private readonly slots: Record<View, Slot> = { roster: emptySlot(), vote: emptySlot() };
+  private readonly slots: Record<View, Slot> = { roster: emptySlot(), vote: emptySlot(), countdown: emptySlot() };
 
   constructor() {
     super();
@@ -56,6 +59,15 @@ export class PanelWindows extends EventEmitter {
     this.hide('roster');
   }
 
+  /** The shutdown countdown, in the middle of the main display: hard to miss, and its button easy to reach. */
+  showCountdown(state: CountdownState): void {
+    this.show('countdown', centredIn(COUNTDOWN_SIZE, screen.getPrimaryDisplay().workArea), state);
+  }
+
+  hideCountdown(): void {
+    this.hide('countdown');
+  }
+
   /** Sends a new state to a window that is already up; nothing happens for one that isn't. */
   update(state: PanelState): void {
     const slot = this.slots[state.view];
@@ -66,14 +78,14 @@ export class PanelWindows extends EventEmitter {
 
   destroy(): void {
     ipcMain.removeListener(PANEL_CH.action, this.onAction);
-    for (const view of ['roster', 'vote'] as const) {
+    for (const view of ['roster', 'vote', 'countdown'] as const) {
       const w = this.slots[view].win;
       this.slots[view] = emptySlot();
       if (w && !w.isDestroyed()) w.destroy();
     }
   }
 
-  private show(view: View, rect: Rect, state: PanelState): void {
+  private show(view: View, rect: Rect, state: PanelMessage): void {
     const slot = this.slots[view];
     slot.state = state;
     slot.shown = true;
@@ -89,7 +101,7 @@ export class PanelWindows extends EventEmitter {
     slot.shown = false;
     if (!slot.win || slot.win.isDestroyed()) return;
     // The window is reused: clear what it drew, so the next show can't flash this vote's card before its own.
-    if (view === 'vote' && slot.state) slot.win.webContents.send(PANEL_CH.state, { ...slot.state, vote: null, voteOver: false });
+    if (slot.state?.view === 'vote') slot.win.webContents.send(PANEL_CH.state, { ...slot.state, vote: null, voteOver: false });
     slot.win.hide();
   }
 
@@ -158,7 +170,7 @@ export class PanelWindows extends EventEmitter {
   }
 
   private readonly onAction = (event: IpcMainEvent, raw: unknown): void => {
-    const view = (['roster', 'vote'] as const).find((v) => this.slots[v].win?.webContents === event.sender);
+    const view = (['roster', 'vote', 'countdown'] as const).find((v) => this.slots[v].win?.webContents === event.sender);
     if (!view) return;
     const action = parsePanelAction(raw);
     if (action && ALLOWED[view].has(action.t)) this.emit('action', action);

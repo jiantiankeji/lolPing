@@ -5,6 +5,8 @@ import type { Rect } from './coords';
 export const SURRENDER_SIZE = { width: 223, height: 113 };
 export const READY_SIZE = { width: 442, height: 452 };
 export const ROSTER_SIZE = { width: 720, height: 470 };
+/** The shutdown countdown: a card small enough to sit in the middle without hiding what is behind it. */
+export const COUNTDOWN_SIZE = { width: 320, height: 176 };
 
 const EDGE_GAP = 16;
 /** How far down the display the surrender widget starts, like League's. */

@@ -6,8 +6,11 @@ namespace lp {
 
 std::string formatEmit(const Emit& e) {
   auto pt = [&](const char* type) {
-    return std::string("{\"type\":\"") + type + "\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) +
-           ",\"wheel\":\"" + (e.wheel == WheelKind::Emote ? "emote" : "ping") + "\"}";
+    std::string s = std::string("{\"type\":\"") + type + "\",\"x\":" + std::to_string(e.x) + ",\"y\":" + std::to_string(e.y) +
+                    ",\"wheel\":\"" + (e.wheel == WheelKind::Emote ? "emote" : "ping") + "\"";
+    // A release says which modifiers were held: the app reads Ctrl+Shift as "ask the model about this screen".
+    if (e.mods != 0) s += ",\"mods\":" + std::to_string(e.mods);
+    return s + "}";
   };
   switch (e.kind) {
     case Emit::Kind::WheelOpen: return pt("wheelOpen");

@@ -11,6 +11,7 @@ describe('parsePanelAction', () => {
     expect(parsePanelAction({ t: 'vote', kind: 'ff' })).toEqual({ t: 'vote', kind: 'ff' });
     expect(parsePanelAction({ t: 'vote', kind: 'ready' })).toEqual({ t: 'vote', kind: 'ready' });
     expect(parsePanelAction({ t: 'ballot', yes: false })).toEqual({ t: 'ballot', yes: false });
+    expect(parsePanelAction({ t: 'cancelShutdown' })).toEqual({ t: 'cancelShutdown' });
   });
 
   it('refuses anything that is not an object with a known type', () => {

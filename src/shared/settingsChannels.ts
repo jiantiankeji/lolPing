@@ -33,4 +33,8 @@ export const SETTINGS_CH = {
   updateStart: 'update:start',
   updateOpenRelease: 'update:openRelease',
   showSection: 'settings:showSection',
+  launchGet: 'launch:get',
+  launchSet: 'launch:set',
+  launchCheck: 'launch:check',
+  launchPick: 'launch:pickPath',
 } as const;

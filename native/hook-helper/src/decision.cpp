@@ -31,11 +31,12 @@ uint32_t modBit(uint32_t vk) {
   }
 }
 
-Emit point(Emit::Kind k, int x, int y, WheelKind w) {
+Emit point(Emit::Kind k, int x, int y, WheelKind w, uint32_t mods = 0) {
   Emit e{k};
   e.x = x;
   e.y = y;
   e.wheel = w;
+  e.mods = mods;
   return e;
 }
 
@@ -393,9 +394,11 @@ void Decision::onMouseDown(const InputEvent& e, Result& r) {
   if (state_ != State::Idle) return;
   if (foreignKey_) return;  // the trigger is part of another program's chord: let the click through
   // Exactly one wheel's trigger must claim the press. When both do (Alt and Ctrl held), it's ambiguous:
-  // pass it through untouched rather than guess.
+  // pass it through untouched rather than guess — unless Shift is held too: then Ctrl+Shift is the chord that asks
+  // the model about a screenshot, so the emote wheel bows out and the ping wheel opens.
   const bool ping = startsGesture(WheelKind::Ping, e.btn);
-  const bool emote = startsGesture(WheelKind::Emote, e.btn);
+  const bool emoteWanted = startsGesture(WheelKind::Emote, e.btn);
+  const bool emote = emoteWanted && !(ping && (mods() & ModShift) != 0);
   if (ping != emote) {
     // A fullscreen app (a game) owns the screen: its clicks belong to it, not to a wheel. Probed
     // only when a gesture would actually start, so plain clicks never pay for the check.
@@ -427,7 +430,7 @@ void Decision::onMouseUp(const InputEvent& e, Result& r) {
       r.injects.push_back({InjectKind::ButtonUp, dragBtn_});
     }
   } else if (state_ == State::Wheel) {
-    r.emits.push_back(point(Emit::Kind::WheelRelease, e.x, e.y, owner_));
+    r.emits.push_back(point(Emit::Kind::WheelRelease, e.x, e.y, owner_, mods()));
   }
   state_ = State::Idle;
 }
