@@ -122,8 +122,21 @@ export interface CountdownState {
   hotkey: string;
 }
 
-/** What a panel window receives: the room's panels, or the shutdown countdown. */
-export type PanelMessage = PanelState | CountdownState;
+/**
+ * The answer card: what the model wrote, in full. It never cuts the text — the window is small and shows a few lines,
+ * and the buttons always on it either give the whole answer or take the card away.
+ */
+export interface AnswerState {
+  view: 'answer';
+  lang: Lang;
+  /** The whole answer, exactly as the model wrote it. Drawn as text, never as markup. */
+  text: string;
+  /** Showing all of it: the window is larger and the text scrolls. */
+  expanded: boolean;
+}
+
+/** What a panel window receives: the room's panels, the shutdown countdown, or an AI answer. */
+export type PanelMessage = PanelState | CountdownState | AnswerState;
 
 /** What a click in a panel window asks for. An `alive` line is placed at the cursor by the app, not by the page. */
 export type PanelAction =
@@ -132,7 +145,10 @@ export type PanelAction =
   | { t: 'kick'; peer: string }
   | { t: 'vote'; kind: 'ff' | 'ready' }
   | { t: 'ballot'; yes: boolean }
-  | { t: 'cancelShutdown' };
+  | { t: 'cancelShutdown' }
+  | { t: 'expandAnswer'; expanded: boolean }
+  | { t: 'dragAnswer'; dx: number; dy: number; start: boolean }
+  | { t: 'closeAnswer' };
 
 export interface PanelApi {
   /** Calls `cb` with every state the main process sends; returns the way to stop. */
@@ -159,6 +175,13 @@ export function parsePanelAction(raw: unknown): PanelAction | null {
       return typeof a.yes === 'boolean' ? { t: 'ballot', yes: a.yes } : null;
     case 'cancelShutdown':
       return { t: 'cancelShutdown' };
+    case 'expandAnswer':
+      return typeof a.expanded === 'boolean' ? { t: 'expandAnswer', expanded: a.expanded } : null;
+    case 'dragAnswer':
+      return isNum(a.dx) && isNum(a.dy) && typeof a.start === 'boolean'
+        ? { t: 'dragAnswer', dx: a.dx, dy: a.dy, start: a.start } : null;
+    case 'closeAnswer':
+      return { t: 'closeAnswer' };
     default:
       return null;
   }

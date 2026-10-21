@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  AiPing, AI_ANSWER_OWNER, AI_MIN_GAP_MS, AI_THINKING_OWNER, type AiPingDeps,
+  AiPing, AI_MIN_GAP_MS, AI_THINKING_OWNER, type AiPingDeps,
 } from '../../src/main/aiPing';
 import type { VisionResult } from '../../src/main/deepseekVision';
 import { askPrompt } from '../../src/shared/aiAsk';
@@ -13,19 +13,23 @@ function harness(over: Partial<AiPingDeps> = {}): {
   ai: AiPing;
   deps: AiPingDeps;
   shown: Array<{ displayId: number; x: number; y: number; text: string; owner: string; sticky?: boolean }>;
+  answers: Array<{ displayId: number; x: number; y: number; text: string }>;
   toasts: Array<{ title: string; body: string }>;
   captures: number[];
   asked: Array<{ key: string; prompt: string; jpeg: Uint8Array; deep: boolean }>;
   cleared: string[];
   released: () => number;
+  closed: () => number;
   setNow(ms: number): void;
 } {
   const shown: Array<{ displayId: number; x: number; y: number; text: string; owner: string; sticky?: boolean }> = [];
+  const answers: Array<{ displayId: number; x: number; y: number; text: string }> = [];
   const toasts: Array<{ title: string; body: string }> = [];
   const captures: number[] = [];
   const asked: Array<{ key: string; prompt: string; jpeg: Uint8Array; deep: boolean }> = [];
   const cleared: string[] = [];
   let released = 0;
+  let closed = 0;
   let nowMs = 1_000_000;
   const deps: AiPingDeps = {
     settings: () => ({ aiAsk: true, deepseekKey: 'sk-test', deepPrompt: '' }),
@@ -40,6 +44,10 @@ function harness(over: Partial<AiPingDeps> = {}): {
       return { ok: true, text: 'Wait for the wave.' };
     },
     show: (p) => shown.push(p),
+    answer: (p) => answers.push(p),
+    closeAnswer: () => {
+      closed++;
+    },
     clearText: (owner) => cleared.push(owner),
     releasePing: () => {
       released++;
@@ -49,8 +57,9 @@ function harness(over: Partial<AiPingDeps> = {}): {
     ...over,
   };
   return {
-    ai: new AiPing(deps), deps, shown, toasts, captures, asked, cleared,
+    ai: new AiPing(deps), deps, shown, answers, toasts, captures, asked, cleared,
     released: () => released,
+    closed: () => closed,
     setNow: (ms) => { nowMs = ms; },
   };
 }
@@ -81,13 +90,15 @@ describe('AiPing', () => {
     expect(h.captures).toHaveLength(0);
   });
 
-  it('sends one screenshot of the display the ping went to, and shows the answer there', async () => {
+  it('sends one screenshot of the display the ping went to, and puts the answer there in full', async () => {
     const h = harness();
     await h.ai.ping(SPOT);
     expect(h.captures).toEqual([2]);
     expect(h.asked).toHaveLength(1);
     expect(h.asked[0]).toMatchObject({ key: 'sk-test', prompt: askPrompt('en'), jpeg: SHOT });
-    expect(h.shown).toEqual([{ ...SPOT, text: 'Wait for the wave.', owner: AI_ANSWER_OWNER }]);
+    expect(h.answers).toEqual([{ ...SPOT, text: 'Wait for the wave.' }]);
+    // The answer is not a line of overlay text any more: it is a card that can be expanded.
+    expect(h.shown).toEqual([]);
     expect(h.toasts).toHaveLength(0);
   });
 
@@ -108,18 +119,19 @@ describe('AiPing', () => {
         displayId: SPOT.displayId, x: SPOT.x, y: 160, text: strings('en').aiThinking,
         owner: AI_THINKING_OWNER, sticky: true,
       },
-      { ...SPOT, text: 'Wait for the wave.', owner: AI_ANSWER_OWNER },
     ]);
+    expect(h.answers).toEqual([{ ...SPOT, text: 'Wait for the wave.' }]);
   });
 
   it('keeps that line up for the whole ask and clears it when the answer takes its place', async () => {
     // The pending line is not timed: it lives exactly as long as the thinking does.
     const h = harness();
     await h.ai.ping(SPOT, true);
-    expect(h.shown.map((p) => p.owner)).toEqual([AI_THINKING_OWNER, AI_ANSWER_OWNER]);
+    expect(h.shown.map((p) => p.owner)).toEqual([AI_THINKING_OWNER]);
     expect(h.cleared).toEqual([AI_THINKING_OWNER]);
     // The held ping is let go at the same moment: the icon stays for exactly as long as the thinking.
     expect(h.released()).toBe(1);
+    expect(h.answers).toHaveLength(1);
   });
 
   it('clears the pending line when the ask fails too', async () => {
@@ -129,6 +141,7 @@ describe('AiPing', () => {
     expect(h.shown.map((p) => p.owner)).toEqual([AI_THINKING_OWNER]);
     expect(h.toasts).toHaveLength(1);
     expect(h.released()).toBe(1);
+    expect(h.answers).toHaveLength(0);
   });
 
   it('asks the question typed in the box on a deep ask, and the built-in one when it was sent empty', async () => {
@@ -174,14 +187,32 @@ describe('AiPing', () => {
       const h = harness({ vision: async () => result });
       await h.ai.ping(SPOT);
       expect(h.toasts[0].title, title).toBe(title);
-      expect(h.shown).toHaveLength(0);
+      expect(h.answers).toHaveLength(0);
     }
   });
 
-  it('flattens and cuts what the model answered', async () => {
-    const h = harness({ vision: async () => ({ ok: true, text: '**Back** off,\nthey are coming.' }) });
+  it('hands the whole answer over as it was written, since the card can grow to show it', async () => {
+    const written = '**Back** off,\nthey are coming.\n\n- top\n- jungle';
+    const h = harness({ vision: async () => ({ ok: true, text: written }) });
     await h.ai.ping(SPOT);
-    expect(h.shown[0].text).toBe('Back off, they are coming.');
+    expect(h.answers[0].text).toBe(written);
+  });
+
+  it('takes the last answer down when a new question goes out', async () => {
+    const h = harness();
+    await h.ai.ping(SPOT);
+    expect(h.closed()).toBe(1); // before the first shot, so nothing of an older answer is left
+    h.setNow(h.deps.now() + AI_MIN_GAP_MS);
+    await h.ai.ping(SPOT);
+    expect(h.closed()).toBe(2);
+  });
+
+  it('leaves the answer alone when the question was too soon to send', async () => {
+    const h = harness();
+    await h.ai.ping(SPOT);
+    await h.ai.ping(SPOT); // inside the gap: not a question at all
+    expect(h.closed()).toBe(1);
+    expect(h.answers).toHaveLength(1);
   });
 
   it('ignores a second question while the first is still out', async () => {
@@ -196,7 +227,7 @@ describe('AiPing', () => {
     expect(pending.captures).toHaveLength(1);
     release({ ok: true, text: 'Go.' });
     await first;
-    expect(pending.shown).toHaveLength(1);
+    expect(pending.answers).toHaveLength(1);
   });
 
   it('keeps a gap between two questions, then answers again', async () => {

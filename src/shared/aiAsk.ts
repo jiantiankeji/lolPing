@@ -38,20 +38,3 @@ export function deepPrompt(question: string, lang: Lang): string {
   if (own === '') return askPrompt(lang);
   return `${own}\n\n${IGNORE_OVERLAY[lang]}`;
 }
-
-/** How much of an answer the spot bubble can show before it stops reading as one line. */
-export const ANSWER_MAX = 120;
-
-/**
- * A model's answer as one line: a fence's contents, markdown marks and line breaks gone, cut to `max` code points.
- * The answer comes from another machine, and the bubble is text only, so nothing here is interpreted as markup.
- */
-export function oneLine(raw: string, max = ANSWER_MAX): string {
-  const flat = raw
-    .replace(/```[\s\S]*?```/g, ' ')
-    .replace(/[*_`#>]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  const chars = [...flat];
-  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : flat;
-}

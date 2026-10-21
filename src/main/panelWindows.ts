@@ -1,11 +1,12 @@
 import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
-  PANEL_CH, parsePanelAction, type CountdownState, type PanelAction, type PanelMessage, type PanelState,
+  PANEL_CH, parsePanelAction, type AnswerState, type CountdownState, type PanelAction, type PanelMessage,
+  type PanelState,
 } from '../shared/ipc';
 import type { Rect } from './coords';
 import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from './paths';
-import { centredIn, COUNTDOWN_SIZE, ROSTER_SIZE, votePlacement } from './panelPlacement';
+import { answerPlacement, centredIn, COUNTDOWN_SIZE, ROSTER_SIZE, votePlacement } from './panelPlacement';
 
 type View = PanelMessage['view'];
 
@@ -14,7 +15,11 @@ const ALLOWED: Record<View, ReadonlySet<PanelAction['t']>> = {
   vote: new Set(['ballot']),
   roster: new Set(['alive', 'mute', 'kick', 'vote']),
   countdown: new Set(['cancelShutdown']),
+  // The answer card only ever asks for itself: all of the text, none of it, or a new place to sit.
+  answer: new Set(['expandAnswer', 'closeAnswer', 'dragAnswer']),
 };
+
+const VIEWS = ['roster', 'vote', 'countdown', 'answer'] as const;
 
 interface Slot {
   win: BrowserWindow | null;
@@ -33,7 +38,9 @@ const emptySlot = (): Slot => ({ win: null, loaded: false, state: null, shown: f
  * Emits 'action' with a validated PanelAction.
  */
 export class PanelWindows extends EventEmitter {
-  private readonly slots: Record<View, Slot> = { roster: emptySlot(), vote: emptySlot(), countdown: emptySlot() };
+  private readonly slots: Record<View, Slot> = {
+    roster: emptySlot(), vote: emptySlot(), countdown: emptySlot(), answer: emptySlot(),
+  };
 
   constructor() {
     super();
@@ -68,6 +75,28 @@ export class PanelWindows extends EventEmitter {
     this.hide('countdown');
   }
 
+  /**
+   * The answer card, centred on the point the ping was placed at (`at` is in screen DIPs) and kept inside that
+   * display's work area. `state.expanded` decides its size, so expanding is the same call with a taller state.
+   */
+  showAnswer(at: { x: number; y: number }, state: AnswerState): void {
+    const area = screen.getDisplayNearestPoint(at).workArea;
+    this.show('answer', answerPlacement(at, state.expanded, area), state);
+  }
+
+  hideAnswer(): void {
+    this.hide('answer');
+  }
+
+  /** Moves the card without touching what it says: dragging only changes where the anchor point is. */
+  moveAnswer(at: { x: number; y: number }): void {
+    const slot = this.slots.answer;
+    const state = slot.state;
+    if (!slot.shown || !slot.win || slot.win.isDestroyed() || state?.view !== 'answer') return;
+    const area = screen.getDisplayNearestPoint(at).workArea;
+    slot.win.setBounds(answerPlacement(at, state.expanded, area));
+  }
+
   /** Sends a new state to a window that is already up; nothing happens for one that isn't. */
   update(state: PanelState): void {
     const slot = this.slots[state.view];
@@ -78,7 +107,7 @@ export class PanelWindows extends EventEmitter {
 
   destroy(): void {
     ipcMain.removeListener(PANEL_CH.action, this.onAction);
-    for (const view of ['roster', 'vote', 'countdown'] as const) {
+    for (const view of VIEWS) {
       const w = this.slots[view].win;
       this.slots[view] = emptySlot();
       if (w && !w.isDestroyed()) w.destroy();
@@ -170,7 +199,7 @@ export class PanelWindows extends EventEmitter {
   }
 
   private readonly onAction = (event: IpcMainEvent, raw: unknown): void => {
-    const view = (['roster', 'vote', 'countdown'] as const).find((v) => this.slots[v].win?.webContents === event.sender);
+    const view = VIEWS.find((v) => this.slots[v].win?.webContents === event.sender);
     if (!view) return;
     const action = parsePanelAction(raw);
     if (action && ALLOWED[view].has(action.t)) this.emit('action', action);

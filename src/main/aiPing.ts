@@ -1,4 +1,4 @@
-import { askPrompt, deepPrompt, oneLine } from '../shared/aiAsk';
+import { askPrompt, deepPrompt } from '../shared/aiAsk';
 import type { Lang, Strings } from '../shared/i18n';
 import type { Settings } from '../shared/settings';
 import type { VisionFailure, VisionResult } from './deepseekVision';
@@ -8,8 +8,6 @@ export const AI_MIN_GAP_MS = 5000;
 
 /** The line that says a deep question is being thought through: up until the answer (or the failure) clears it. */
 export const AI_THINKING_OWNER = 'ai-thinking';
-/** The answer's own owner, so clearing the pending line never takes the answer with it. */
-export const AI_ANSWER_OWNER = 'ai';
 
 export interface AiPingDeps {
   /** The AI setting and the key it sends with, read at the moment of the ping (the settings file may have changed). */
@@ -18,8 +16,12 @@ export interface AiPingDeps {
   text(): Strings;
   capture(displayId: number): Promise<Uint8Array | null>;
   vision(input: { key: string; prompt: string; jpeg: Uint8Array; deep: boolean }): Promise<VisionResult>;
-  /** Draws a line on the display the ping went to: the answer, or the pending one while a deep ask runs. */
+  /** Draws a line on the display the ping went to: the pending one while a deep ask runs. */
   show(p: { displayId: number; x: number; y: number; text: string; owner: string; sticky?: boolean }): void;
+  /** Puts the answer on screen in full, at the ping, with the buttons to expand it and to close it. */
+  answer(p: { displayId: number; x: number; y: number; text: string }): void;
+  /** Takes down an answer left over from an earlier ask. */
+  closeAnswer(): void;
   /** Takes down every line of one owner, on every display. */
   clearText(owner: string): void;
   /** Takes down the ping the overlay held while a deep ask ran. */
@@ -57,6 +59,8 @@ export class AiPing {
     if (this.busy || now - this.lastAt < this.minGapMs) return;
     this.busy = true;
     this.lastAt = now;
+    // A new question replaces the last answer: one card on screen, the one being asked about.
+    this.deps.closeAnswer();
     /** The pending line is on screen: it has to come down however this ask ends. */
     let pendingUp = false;
     try {
@@ -83,7 +87,7 @@ export class AiPing {
         pendingUp = false;
       }
       if (!answer.ok) this.fail(answer.kind, t);
-      else this.deps.show({ displayId: p.displayId, x: p.x, y: p.y, text: oneLine(answer.text), owner: AI_ANSWER_OWNER });
+      else this.deps.answer({ displayId: p.displayId, x: p.x, y: p.y, text: answer.text });
     } finally {
       this.busy = false;
       // A pending line and a held ping must never outlive their question, however the ask ended.

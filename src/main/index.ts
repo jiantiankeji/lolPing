@@ -40,6 +40,7 @@ import { assetPath, buildResourcePath, helperExePath, IS_LINUX, IS_MAC, PLATFORM
 import { deriveRoomKeys } from './roomCrypto';
 import { RoomHistory } from './roomHistory';
 import { PanelWindows } from './panelWindows';
+import { draggedTo } from './panelPlacement';
 import { MAX_MEMBERS, RoomManager, type RoomToast } from './roomManager';
 import { postLine, startRoomText, type RoomTextDeps } from './roomText';
 import { RoomVotes, voteResultLine } from './roomVotes';
@@ -374,6 +375,23 @@ function start(): void {
   room.on('remotePing', (p) => overlays.spawnRemote(p));
   // The ? ping asks DeepSeek about a screenshot of the display it was placed on; with the setting off it is a plain ping.
   const vision = new DeepSeekVision({ fetch: (url, init) => fetch(url, init) });
+  // The answer card keeps its text and the point it belongs to here: expanding it never round-trips the answer.
+  let answerAt: { x: number; y: number } | null = null;
+  let answerText = '';
+  /** Where the card sat when the current drag began, so every move is measured from that same point. */
+  let answerDragFrom: { x: number; y: number } | null = null;
+  const paintAnswer = (expanded: boolean): void => {
+    if (answerAt === null) return;
+    panels.showAnswer(answerAt, {
+      view: 'answer', lang: resolveLang(settings.language, app.getLocale()), text: answerText, expanded,
+    });
+  };
+  const closeAnswer = (): void => {
+    answerAt = null;
+    answerText = '';
+    answerDragFrom = null;
+    panels.hideAnswer();
+  };
   const aiPing = new AiPing({
     settings: () => ({ aiAsk: settings.aiAsk, deepseekKey: settings.deepseekKey }),
     lang: () => resolveLang(settings.language, app.getLocale()),
@@ -381,6 +399,14 @@ function start(): void {
     capture: (displayId) => captureDisplay(displayId),
     vision: (input) => vision.ask(input),
     show: (p) => overlays.spawnText({ ...p, y: Math.max(48, p.y - 48), style: 'spot' }),
+    answer: (p) => {
+      // The overlay counts from the display's own corner; the card is a window, so it needs screen coordinates.
+      const display = screen.getAllDisplays().find((d) => d.id === p.displayId) ?? screen.getPrimaryDisplay();
+      answerAt = { x: display.bounds.x + p.x, y: display.bounds.y + p.y };
+      answerText = p.text;
+      paintAnswer(false);
+    },
+    closeAnswer,
     clearText: (owner) => overlays.clearText(owner),
     releasePing: () => overlays.releaseHeldPing(),
     toast: (title, body) => {
@@ -501,6 +527,20 @@ function start(): void {
         break;
       case 'cancelShutdown':
         countdown.cancel();
+        break;
+      case 'expandAnswer':
+        paintAnswer(a.expanded);
+        break;
+      case 'dragAnswer':
+        // The card is moved by the pointer, measured from where the drag started: one card, one anchor.
+        if (a.start || answerDragFrom === null) answerDragFrom = answerAt;
+        if (answerDragFrom !== null) {
+          answerAt = draggedTo(answerDragFrom, a.dx, a.dy);
+          panels.moveAnswer(answerAt);
+        }
+        break;
+      case 'closeAnswer':
+        closeAnswer();
         break;
     }
   });
