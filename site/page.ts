@@ -8,7 +8,7 @@ import { isSoundOn, setSoundOn } from './sound';
 
 const MEANINGS: Record<PingId, string> = {
   danger: 'Back off, it’s not safe here.',
-  push: 'Take the wave or the tower.',
+  push: 'Send a file to a member of your room.',
   omw: 'I’m heading there.',
   allin: 'Everybody commit, now.',
   assist: 'Come help me here.',

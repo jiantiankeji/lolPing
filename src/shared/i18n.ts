@@ -1,9 +1,24 @@
 import type { FeatureId } from './features';
+import type { TransferResult } from './fileShare';
 import type { PingId } from './pings';
 import type { Platform } from './platform';
 import type { MemberPath } from './room';
 
 export type Lang = 'en' | 'zh-CN';
+
+/** Every way a transfer can end, worded once: `fileResult` picks the line in the language in force. */
+type FileResult = TransferResult;
+
+const FILE_RESULT: Record<Lang, Record<FileResult, string>> = {
+  en: {
+    ok: 'Done', refused: 'Declined', cancelled: 'Cancelled', gone: 'No answer',
+    lost: 'The connection dropped', failed: 'The file could not be written', mismatch: 'The file did not arrive intact',
+  },
+  'zh-CN': {
+    ok: '完成', refused: '对方拒绝', cancelled: '已取消', gone: '对方没有回应',
+    lost: '连接中断', failed: '文件写入失败', mismatch: '文件传输不完整',
+  },
+};
 /** The language setting: 'auto' follows the system display language. */
 export type LanguagePref = 'auto' | Lang;
 export const LANGUAGE_PREFS: readonly LanguagePref[] = ['auto', 'en', 'zh-CN'];
@@ -239,6 +254,27 @@ const en = {
   aiCollapse: 'Show less',
   aiClose: 'Close',
   aiDrag: 'Drag to move',
+  aiFollowUp: 'Follow up',
+  aiTurnOlder: 'Older answer',
+  aiTurnNewer: 'Newer answer',
+  aiTurnOf: (index: number, count: number) => `${index} / ${count}`,
+  aiFollowUpPlaceholder: 'What next?',
+  aiFollowUpHint: 'Enter sends it with the answer on screen; Esc cancels.',
+  fileBusy: 'A file is already moving',
+  fileNobody: 'Nobody to send it to',
+  fileNobodyBody: 'Files travel only inside a room on the local network. Join one first.',
+  fileGone: 'That file could not be opened',
+  fileTooBig: 'That file is too large',
+  fileTooBigBody: (max: string) => `The limit is ${max} per file.`,
+  fileSaveFailed: 'Could not save the file',
+  fileAskTitle: (name: string) => `${name} wants to send you a file`,
+  fileSendTitle: (name: string) => `Sending to ${name}`,
+  fileReceiveTitle: (name: string) => `Receiving from ${name}`,
+  fileTake: 'Accept',
+  fileDecline: 'Decline',
+  fileCancel: 'Cancel',
+  filePeerPick: 'Who gets the file?',
+  fileResult: (result: FileResult): string => FILE_RESULT.en[result],
   aiKey: 'DeepSeek API key',
   aiKeyDesc: 'Create a key at platform.deepseek.com under API keys. It is saved in this computer’s settings file.',
   aiAskPromptPlaceholder: 'Ask DeepSeek about this screen…',
@@ -329,7 +365,7 @@ const en = {
   shutdownHint: (hotkey: string) => `Another Danger ping, Esc or ${hotkey} also cancels`,
   shutdownFailed: 'The shutdown command failed',
   pingNames: {
-    danger: 'Danger', push: 'Push', omw: 'On My Way', allin: 'All In', assist: 'Assist Me',
+    danger: 'Danger', push: 'Send a file', omw: 'On My Way', allin: 'All In', assist: 'Assist Me',
     needvision: 'Need Vision', missing: 'Enemy Missing', enemyvision: 'Enemy Vision', generic: 'Generic',
     bait: 'Bait', visioncleared: 'Vision Cleared', missingflip: 'Upside-down Missing', ask: 'Question',
   } as Record<PingId, string>,
@@ -679,6 +715,27 @@ const zh: Strings = {
   aiCollapse: '收起',
   aiClose: '关闭',
   aiDrag: '拖动可移动',
+  aiFollowUp: '追问',
+  aiTurnOlder: '更早的回答',
+  aiTurnNewer: '更新的回答',
+  aiTurnOf: (index: number, count: number) => `${index} / ${count}`,
+  aiFollowUpPlaceholder: '接下来做什么？',
+  aiFollowUpHint: '回车会带着屏幕上这条回答一起发送，Esc 取消。',
+  fileBusy: '已经有一个文件在传了',
+  fileNobody: '没有可以发给的人',
+  fileNobodyBody: '文件只在局域网房间里传，请先加入一个房间。',
+  fileGone: '打不开这个文件',
+  fileTooBig: '文件太大',
+  fileTooBigBody: (max: string) => `单个文件上限是 ${max}。`,
+  fileSaveFailed: '无法保存文件',
+  fileAskTitle: (name: string) => `${name} 想给你传一个文件`,
+  fileSendTitle: (name: string) => `正在发给 ${name}`,
+  fileReceiveTitle: (name: string) => `正在接收（来自 ${name}）`,
+  fileTake: '接受',
+  fileDecline: '拒绝',
+  fileCancel: '取消',
+  filePeerPick: '发给谁？',
+  fileResult: (result: FileResult): string => FILE_RESULT['zh-CN'][result],
   aiKey: 'DeepSeek API 密钥',
   aiKeyDesc: '在 platform.deepseek.com 的 API keys 页面创建。密钥保存在本机的设置文件中。',
   aiAskPromptPlaceholder: '想问 DeepSeek 屏幕上的什么…',
@@ -767,7 +824,7 @@ const zh: Strings = {
   shutdownHint: (hotkey) => `再发一次撤退信号、按 Esc 或 ${hotkey} 也可以取消`,
   shutdownFailed: '关机命令执行失败',
   pingNames: {
-    danger: '危险', push: '推进', omw: '正在赶来', allin: '全力进攻', assist: '请求协助',
+    danger: '危险', push: '传文件', omw: '正在赶来', allin: '全力进攻', assist: '请求协助',
     needvision: '需要视野', missing: '敌人消失', enemyvision: '敌方视野', generic: '普通信号',
     bait: '诱饵', visioncleared: '视野已清除', missingflip: '反向问号', ask: '问号',
   },

@@ -6,8 +6,9 @@ import type { JoinResult, MemberPath, RoomMember, RoomStateCore } from '../share
 import type { TagRgb } from '../shared/roomColors';
 import { formatRoomCode, makeRoomCode, parseRoomCode } from '../shared/roomCode';
 import {
-  decodeSigned, encodeMessage, isOlderThan, joinSigned, PROTOCOL_VERSION, ROOM_CHAT_SINCE, type BallotMsg, type MemberStatus,
-  type PresenceMsg, type RoomFeatureOff, type RoomMessage, type VoteKind, type VoteMsg,
+  decodeSigned, encodeMessage, isFileMessage, isOlderThan, joinSigned, PROTOCOL_VERSION, ROOM_CHAT_SINCE,
+  type BallotMsg, type FileMsg, type MemberStatus, type PresenceMsg, type RoomFeatureOff, type RoomMessage,
+  type VoteKind, type VoteMsg,
 } from '../shared/roomProtocol';
 import { RateLimiter } from './rateLimiter';
 import { ReplayGuard } from './replayGuard';
@@ -34,6 +35,10 @@ export const RELAY_PING_BURST = 10;
 const BALLOT_RATE = 0.5;
 /** want/chunk messages accepted per member: a still's chunks arrive as a burst, so this bucket is wider than the ping one. */
 const TRANSFER_RATE = 60;
+/** File parts accepted per member: a 200 MB transfer is a quarter of a million of these, so the bucket is wide. */
+const FILE_PART_RATE = 2000;
+/** The rest of a file transfer's messages: an offer, an answer, an acknowledgement now and then. */
+const FILE_CONTROL_RATE = 20;
 /** Presence asked for on a shared transport (a change, a new link, a new member): at most this often. */
 const SHARED_PRESENCE_MS = 1000;
 /** The first app version that shows emotes. */
@@ -90,6 +95,15 @@ export type RoomToast =
   | { kind: 'joined' | 'left' | 'disconnected' | 'kicked'; name: string }
   | { kind: 'joinedRoom'; code: string }
   | { kind: 'full' };
+
+/** One file-transfer message from a member, already past the room's gates and its own budget. */
+export interface RoomFile {
+  /** The member it came from. */
+  peer: string;
+  /** That member's name, for the card that asks whether to take it. */
+  name: string;
+  msg: FileMsg;
+}
 
 export interface RoomDeps {
   transports: Transport[];
@@ -164,6 +178,8 @@ export class RoomManager extends EventEmitter {
   private readonly transferLimiter: RateLimiter;
   /** Ballots per member, apart from `limiter`: a vote needs every answer, but not a flood of them. */
   private readonly ballotLimiter: RateLimiter;
+  /** File transfers per member, apart from `limiter`: a whole file arrives as a quarter of a million parts. */
+  private readonly fileLimiter: RateLimiter;
   private paused = false;
   private roomMuted = false;
   private aloneSince: number | null = null;
@@ -193,6 +209,7 @@ export class RoomManager extends EventEmitter {
     this.limiter = new RateLimiter(deps.now);
     this.transferLimiter = new RateLimiter(deps.now);
     this.ballotLimiter = new RateLimiter(deps.now);
+    this.fileLimiter = new RateLimiter(deps.now);
     this.relayCap = new RateLimiter(deps.now);
     for (const t of deps.transports) {
       t.on('packet', (peer: PeerKey, packet: Uint8Array) => this.onPacket(t, peer, packet));
@@ -549,6 +566,13 @@ export class RoomManager extends EventEmitter {
     }
     // Pings, emotes, text, alive lines and votes pass the same gates and share one budget per member.
     if (this.paused || this.roomMuted || m.muted || m.needsUpdate) return;
+    // A file transfer has a budget of its own: parts arrive far faster than anything else a member sends, and none of
+    // them carries a point on screen. It never goes to the shared transports: a whole file is not a room message.
+    if (isFileMessage(msg)) {
+      const rate = msg.t === 'part' ? FILE_PART_RATE : FILE_CONTROL_RATE;
+      if (this.fileLimiter.allow(m.peer, rate)) this.emit('file', { peer: m.peer, name: m.name, msg } satisfies RoomFile);
+      return;
+    }
     if (!this.limiter.allow(m.peer, this.deps.profile().limit)) return;
     if (msg.t === 'vote') {
       this.emit('vote', msg satisfies VoteMsg);

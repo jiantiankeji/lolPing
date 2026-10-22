@@ -110,6 +110,12 @@ function memberRow(m: RoomMember, state: PanelState, t: Strings, act: (a: PanelA
   who.append(tag, el('span', 'path', m.self ? t.roomYou : t.roomPath[m.path]));
 
   const icons = el('div', 'icons');
+  // Picking the member a file goes to: only while the app is asking, and never our own row.
+  if (state.filePicking && !m.self) {
+    const send = iconButton('file', t.filePeerPick, () => act({ t: 'fileTo', peer: m.peer }));
+    send.textContent = '⇪';
+    icons.append(send);
+  }
   if (can.mute) {
     const mute = iconButton(`speaker${m.muted ? ' on' : ''}`, m.muted ? t.roomUnmuteMember : t.roomMuteMember,
       () => act({ t: 'mute', peer: m.peer, on: !m.muted }));

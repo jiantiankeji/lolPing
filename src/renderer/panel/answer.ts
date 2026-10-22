@@ -3,24 +3,42 @@ import type { AnswerState, PanelAction } from '../../shared/ipc';
 import { renderMarkdown } from './markdownDom';
 import { el } from './vote';
 
-/** What the card says, in the language in force: the same two buttons in both states, worded for the state. */
+/** What the card says, in the language in force: its buttons, and where it stands in the history. */
 export interface AnswerView {
   title: string;
   close: string;
   expand: string;
   /** Says the title bar can be dragged, so nobody has to guess how the card moves. */
   drag: string;
+  /** "Show all" / "Show less" state, for the CSS as well as the button. */
   expanded: boolean;
+  /** The follow-up button, and the two that page through what was asked before. */
+  followUp: string;
+  older: string;
+  newer: string;
+  /** "2 / 7": which answer of how many is on show. */
+  position: string;
+  /** There is something older to show, and something newer. */
+  canOlder: boolean;
+  canNewer: boolean;
 }
 
-export function answerView(state: Pick<AnswerState, 'lang' | 'expanded'>): AnswerView {
+export function answerView(state: Pick<AnswerState, 'lang' | 'expanded' | 'index' | 'count'>): AnswerView {
   const t = strings(state.lang);
+  const count = Math.max(1, state.count);
+  const index = Math.min(Math.max(0, state.index), count - 1);
   return {
     title: t.aiAnswerTitle,
     close: t.aiClose,
     expand: state.expanded ? t.aiCollapse : t.aiExpand,
     drag: t.aiDrag,
     expanded: state.expanded,
+    followUp: t.aiFollowUp,
+    older: t.aiTurnOlder,
+    newer: t.aiTurnNewer,
+    position: t.aiTurnOf(index + 1, count),
+    canOlder: index < count - 1,
+    canNewer: index > 0,
   };
 }
 
@@ -30,11 +48,24 @@ interface Card {
   root: HTMLElement;
   body: HTMLElement;
   expand: HTMLButtonElement;
+  followUp: HTMLButtonElement;
+  older: HTMLButtonElement;
+  newer: HTMLButtonElement;
+  position: HTMLElement;
   expanded: boolean;
+  index: number;
 }
 
 /** The card on screen, so expanding it does not rebuild the text the user is in the middle of reading. */
 let card: Card | null = null;
+
+/** Whether this state needs a new card: a different answer, language or window. Expanding only rewords a button. */
+export function needsRebuild(
+  card: { lang: string; text: string } | null,
+  next: { lang: string; text: string },
+): boolean {
+  return card === null || card.lang !== next.lang || card.text !== next.text;
+}
 
 /**
  * The AI answer. The text goes in whole and untouched — the window is what is small, not the answer — and the two
@@ -42,8 +73,12 @@ let card: Card | null = null;
  */
 export function renderAnswer(root: HTMLElement, state: AnswerState, act: (a: PanelAction) => void): void {
   const view = answerView(state);
-  if (!card || card.root !== root || card.lang !== state.lang || card.text !== state.text) {
+  // `card === null` first, so the compiler knows the state below is one with a card on screen.
+  if (card === null || needsRebuild(card, state)) {
     dropAnswer();
+    // A rebuild replaces the card: appending to the old one would stack a full-height card below it, out of the window,
+    // and the user would keep reading the answer before this one.
+    root.textContent = '';
     const wrap = el('div', 'answer-card');
     const head = el('div', 'answer-head');
     head.title = view.drag;
@@ -57,19 +92,43 @@ export function renderAnswer(root: HTMLElement, state: AnswerState, act: (a: Pan
     const body = el('div', 'answer-text');
     renderMarkdown(body, state.text);
     const foot = el('div', 'answer-foot');
+    const followUp = el('button', 'answer-follow', view.followUp);
+    followUp.type = 'button';
+    followUp.addEventListener('click', () => act({ t: 'followUp' }));
+    // Paging through what was asked before, newest first: "older" walks back into the history.
+    const pager = el('div', 'answer-pager');
+    const older = el('button', 'answer-step', '‹');
+    older.type = 'button';
+    older.title = view.older;
+    older.setAttribute('aria-label', view.older);
+    older.addEventListener('click', () => act({ t: 'answerTurn', index: (card?.index ?? 0) + 1 }));
+    const position = el('span', 'answer-count', view.position);
+    const newer = el('button', 'answer-step', '›');
+    newer.type = 'button';
+    newer.title = view.newer;
+    newer.setAttribute('aria-label', view.newer);
+    newer.addEventListener('click', () => act({ t: 'answerTurn', index: (card?.index ?? 0) - 1 }));
+    pager.append(older, position, newer);
     const expand = el('button', 'answer-expand');
     expand.type = 'button';
     expand.addEventListener('click', () => act({ t: 'expandAnswer', expanded: !card?.expanded }));
-    foot.append(expand);
+    foot.append(followUp, pager, expand);
     wrap.append(head, body, foot);
     root.append(wrap);
     // The title text is the handle: the ✕ beside it must keep taking its own clicks.
     dragToMove(title, act);
-    card = { lang: state.lang, text: state.text, root, body, expand, expanded: state.expanded };
+    card = {
+      lang: state.lang, text: state.text, root, body, expand, followUp, older, newer, position,
+      expanded: state.expanded, index: state.index,
+    };
   }
   card.expanded = view.expanded;
+  card.index = state.index;
   card.body.classList.toggle('expanded', view.expanded);
   card.expand.textContent = view.expand;
+  card.position.textContent = view.position;
+  card.older.disabled = !view.canOlder;
+  card.newer.disabled = !view.canNewer;
 }
 
 /**

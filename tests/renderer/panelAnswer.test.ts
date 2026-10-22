@@ -1,34 +1,79 @@
 import { describe, expect, it } from 'vitest';
-import { answerView, startsDrag } from '../../src/renderer/panel/answer';
-import { strings } from '../../src/shared/i18n';
+import { answerView, needsRebuild, startsDrag } from '../../src/renderer/panel/answer';
+import { strings, type Lang } from '../../src/shared/i18n';
+
+const view = (over: { lang?: Lang; expanded?: boolean; index?: number; count?: number } = {}): ReturnType<typeof answerView> =>
+  answerView({ lang: 'en', expanded: false, index: 0, count: 1, ...over });
 
 describe('answerView', () => {
-  it('always offers the two buttons: one for all of the answer, one to close it', () => {
+  it('always offers its buttons: show all, follow up, page back, close', () => {
     for (const lang of ['en', 'zh-CN'] as const) {
       const t = strings(lang);
       for (const expanded of [false, true]) {
-        const view = answerView({ lang, expanded });
-        expect(view.title).toBe(t.aiAnswerTitle);
-        expect(view.close).toBe(t.aiClose);
-        expect(view.expand).not.toBe('');
-        // The title bar is the handle: it says so in the language in force.
-        expect(view.drag).toBe(t.aiDrag);
-        expect(view.drag).not.toBe('');
+        const v = view({ lang, expanded });
+        expect(v.title).toBe(t.aiAnswerTitle);
+        expect(v.close).toBe(t.aiClose);
+        expect(v.expand).not.toBe('');
+        expect(v.followUp).toBe(t.aiFollowUp);
+        expect(v.drag).toBe(t.aiDrag);
       }
     }
   });
 
-  it('words the one button by what it will do: show all of it, or put it back', () => {
+  it('words the expand button by what it will do: show all of it, or put it back', () => {
     const t = strings('en');
-    expect(answerView({ lang: 'en', expanded: false }).expand).toBe(t.aiExpand);
-    expect(answerView({ lang: 'en', expanded: true }).expand).toBe(t.aiCollapse);
-    expect(answerView({ lang: 'zh-CN', expanded: false }).expand).toBe(strings('zh-CN').aiExpand);
-    expect(answerView({ lang: 'zh-CN', expanded: false }).expand).not.toBe(t.aiExpand);
+    expect(view({ expanded: false }).expand).toBe(t.aiExpand);
+    expect(view({ expanded: true }).expand).toBe(t.aiCollapse);
+    expect(view({ lang: 'zh-CN' }).expand).toBe(strings('zh-CN').aiExpand);
+    expect(view({ lang: 'zh-CN' }).expand).not.toBe(t.aiExpand);
   });
 
-  it('carries the state through, so the card knows whether to scroll', () => {
-    expect(answerView({ lang: 'en', expanded: true }).expanded).toBe(true);
-    expect(answerView({ lang: 'en', expanded: false }).expanded).toBe(false);
+  it('carries the expanded state through, so the card knows whether to scroll', () => {
+    expect(view({ expanded: true }).expanded).toBe(true);
+    expect(view({ expanded: false }).expanded).toBe(false);
+  });
+
+  it('counts from the newest answer and only offers the way that exists', () => {
+    const newest = view({ index: 0, count: 3 });
+    expect(newest.position).toBe('1 / 3');
+    expect(newest.canNewer).toBe(false); // nothing newer than the answer that just arrived
+    expect(newest.canOlder).toBe(true);
+
+    const older = view({ index: 2, count: 3 });
+    expect(older.position).toBe('3 / 3');
+    expect(older.canOlder).toBe(false);
+    expect(older.canNewer).toBe(true);
+  });
+
+  it('offers no paging at all with a single answer kept', () => {
+    const only = view({ index: 0, count: 1 });
+    expect(only.position).toBe('1 / 1');
+    expect(only.canOlder).toBe(false);
+    expect(only.canNewer).toBe(false);
+  });
+
+  it('keeps the counter inside the history, whatever index arrives', () => {
+    expect(view({ index: 9, count: 3 }).position).toBe('3 / 3');
+    expect(view({ index: -4, count: 3 }).position).toBe('1 / 3');
+    expect(view({ index: 0, count: 0 }).position).toBe('1 / 1'); // never "0 / 0"
+  });
+});
+
+describe('needsRebuild', () => {
+  it('builds the card when there is none yet', () => {
+    expect(needsRebuild(null, { lang: 'en', text: 'Back off.' })).toBe(true);
+  });
+
+  it('keeps the card for the same answer, so expanding does not redraw the text', () => {
+    expect(needsRebuild({ lang: 'en', text: 'Back off.' }, { lang: 'en', text: 'Back off.' })).toBe(false);
+  });
+
+  it('builds a new card for a new answer, which is what makes the second question visible at all', () => {
+    expect(needsRebuild({ lang: 'en', text: 'Back off.' }, { lang: 'en', text: 'Push instead.' })).toBe(true);
+  });
+
+  it('builds a new card when the language changes under it', () => {
+    expect(needsRebuild({ lang: 'en', text: 'Back off.' }, { lang: 'zh-CN', text: 'Back off.' })).toBe(true);
   });
 });
 

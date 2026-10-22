@@ -2,24 +2,26 @@ import { BrowserWindow, ipcMain, screen, type IpcMainEvent } from 'electron';
 import { EventEmitter } from 'node:events';
 import {
   PANEL_CH, parsePanelAction, type AnswerState, type CountdownState, type PanelAction, type PanelMessage,
-  type PanelState,
+  type PanelState, type TransferState,
 } from '../shared/ipc';
 import type { Rect } from './coords';
 import { IS_LINUX, IS_MAC, loadPage, pageUrl, preloadPath } from './paths';
-import { answerPlacement, centredIn, COUNTDOWN_SIZE, ROSTER_SIZE, votePlacement } from './panelPlacement';
+import { answerPlacement, centredIn, COUNTDOWN_SIZE, ROSTER_SIZE, TRANSFER_SIZE, votePlacement } from './panelPlacement';
 
 type View = PanelMessage['view'];
 
 /** What each window may ask for: the vote widget only answers, the roster does the rest, the countdown has one button. */
 const ALLOWED: Record<View, ReadonlySet<PanelAction['t']>> = {
   vote: new Set(['ballot']),
-  roster: new Set(['alive', 'mute', 'kick', 'vote']),
+  roster: new Set(['alive', 'mute', 'kick', 'vote', 'fileTo']),
   countdown: new Set(['cancelShutdown']),
-  // The answer card only ever asks for itself: all of the text, none of it, or a new place to sit.
-  answer: new Set(['expandAnswer', 'closeAnswer', 'dragAnswer']),
+  // The answer card only ever asks for itself: all of the text, none of it, another place to sit, or the next turn.
+  answer: new Set(['expandAnswer', 'closeAnswer', 'dragAnswer', 'answerTurn', 'followUp']),
+  // The transfer card answers an offer, or calls the transfer off.
+  transfer: new Set(['takeFile', 'cancelFile']),
 };
 
-const VIEWS = ['roster', 'vote', 'countdown', 'answer'] as const;
+const VIEWS = ['roster', 'vote', 'countdown', 'answer', 'transfer'] as const;
 
 interface Slot {
   win: BrowserWindow | null;
@@ -39,7 +41,7 @@ const emptySlot = (): Slot => ({ win: null, loaded: false, state: null, shown: f
  */
 export class PanelWindows extends EventEmitter {
   private readonly slots: Record<View, Slot> = {
-    roster: emptySlot(), vote: emptySlot(), countdown: emptySlot(), answer: emptySlot(),
+    roster: emptySlot(), vote: emptySlot(), countdown: emptySlot(), answer: emptySlot(), transfer: emptySlot(),
   };
 
   constructor() {
@@ -86,6 +88,15 @@ export class PanelWindows extends EventEmitter {
 
   hideAnswer(): void {
     this.hide('answer');
+  }
+
+  /** The transfer card, in the middle of the main display: an offer waiting for an answer, or how far a transfer is. */
+  showTransfer(state: TransferState): void {
+    this.show('transfer', centredIn(TRANSFER_SIZE, screen.getPrimaryDisplay().workArea), state);
+  }
+
+  hideTransfer(): void {
+    this.hide('transfer');
   }
 
   /** Moves the card without touching what it says: dragging only changes where the anchor point is. */

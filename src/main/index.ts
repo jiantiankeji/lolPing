@@ -3,9 +3,10 @@ import { spawn } from 'node:child_process';
 import { randomBytes, randomInt } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { userInfo } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { resolveLang, strings, type Strings } from '../shared/i18n';
 import { AI_DEEP_PING, AI_QUICK_PING, DEEP_PROMPT_MAX } from '../shared/aiAsk';
+import type { AiTurn } from '../shared/aiHistory';
 import { activePlan, LAUNCH_PING, launchableItems, launchFailureText, namesForToast } from '../shared/launchItems';
 import { SETTINGS_CH, type About, type AppStatus, type PanelAction, type PanelState } from '../shared/ipc';
 import { announcedEmoteHashes } from '../shared/emotes';
@@ -22,6 +23,9 @@ import { parseTextInput } from '../shared/textCommands';
 import { updateErrorText, type UpdateState } from '../shared/update';
 import { registerAppScheme, serveAppScheme } from './appProtocol';
 import { AiPing } from './aiPing';
+import { FileShares } from './fileShares';
+import { FILE_SHARE_PING } from '../shared/fileShare';
+import { AiHistoryStore } from './aiHistoryStore';
 import { DeepSeekVision } from './deepseekVision';
 import { resolveTarget, toShared } from './displayNumbers';
 import { EmoteCache } from './emoteCache';
@@ -119,6 +123,9 @@ function start(): void {
   // The request gather workspace lives beside the settings, in its own file: it is a list, not a setting.
   const launch = new LaunchStore(settingsDir());
   launch.load();
+  // The answers the card pages through: a local file, never sent anywhere.
+  const aiHistory = new AiHistoryStore(settingsDir());
+  aiHistory.load();
   // Generated VS Code workspace files live under the settings too, never inside the project they open.
   const launcher = makeSystemLauncher(join(settingsDir(), 'workspaces'));
   let settings = store.load();
@@ -380,16 +387,26 @@ function start(): void {
   let answerText = '';
   /** Where the card sat when the current drag began, so every move is measured from that same point. */
   let answerDragFrom: { x: number; y: number } | null = null;
+  /** The ping the card belongs to, in overlay coordinates: a follow-up is asked where the first question was. */
+  let answerSpot: { displayId: number; x: number; y: number } | null = null;
+  /** Which kept turn is on show: 0 is the newest. */
+  let answerIndex = 0;
   const paintAnswer = (expanded: boolean): void => {
     if (answerAt === null) return;
+    const turns = aiHistory.get();
+    const turn = turns[answerIndex];
+    if (!turn) return;
     panels.showAnswer(answerAt, {
-      view: 'answer', lang: resolveLang(settings.language, app.getLocale()), text: answerText, expanded,
+      view: 'answer', lang: resolveLang(settings.language, app.getLocale()), text: turn.answer, expanded,
+      index: answerIndex, count: turns.length,
     });
   };
   const closeAnswer = (): void => {
     answerAt = null;
     answerText = '';
     answerDragFrom = null;
+    answerSpot = null;
+    answerIndex = 0;
     panels.hideAnswer();
   };
   const aiPing = new AiPing({
@@ -404,6 +421,10 @@ function start(): void {
       const display = screen.getAllDisplays().find((d) => d.id === p.displayId) ?? screen.getPrimaryDisplay();
       answerAt = { x: display.bounds.x + p.x, y: display.bounds.y + p.y };
       answerText = p.text;
+      answerSpot = { displayId: p.displayId, x: p.x, y: p.y };
+      // Every answer is kept, so the card can page back through them after this one is closed.
+      aiHistory.add({ question: p.question, answer: p.text, at: Date.now(), deep: p.deep });
+      answerIndex = 0;
       paintAnswer(false);
     },
     closeAnswer,
@@ -414,6 +435,51 @@ function start(): void {
     },
     now: Date.now,
   });
+  /**
+   * Files: the wheel's Push slice used to send a ping. It now sends one file to one member, over the local network only
+   * — a shared relay carries room messages, not a whole file.
+   */
+  let filePickResolve: ((peer: string | null) => void) | null = null;
+  function pickMember(): Promise<string | null> {
+    panels.showRoster(screen.getCursorScreenPoint(), { ...panelState('roster', null), filePicking: true });
+    return new Promise((resolve) => {
+      filePickResolve = resolve;
+      // Nobody chose: close the roster and send nothing rather than hold the ping open for ever.
+      setTimeout(() => {
+        if (filePickResolve !== resolve) return;
+        filePickResolve = null;
+        panels.hideRoster();
+        resolve(null);
+      }, 60_000);
+    });
+  }
+  const files = new FileShares({
+    lang: () => resolveLang(settings.language, app.getLocale()),
+    text,
+    send: (peer, body) => room.sendToLan(peer, body),
+    show: (state) => {
+      if (state) panels.showTransfer(state);
+      else panels.hideTransfer();
+    },
+    toast: (title, body) => {
+      if (!quitting) overlays.toast(title, body);
+    },
+    members: () => room.state().members.filter((m) => !m.self).map((m) => ({ peer: m.peer, name: m.name })),
+    pickMember,
+    pickFile: async () => {
+      const picked = await dialog.showOpenDialog({ properties: ['openFile'] });
+      const path = picked.canceled ? undefined : picked.filePaths[0];
+      return path === undefined ? null : { path, name: basename(path) };
+    },
+    pickSave: async (name) => {
+      const picked = await dialog.showSaveDialog({ defaultPath: join(app.getPath('downloads'), name) });
+      return picked.canceled || picked.filePath === '' ? null : picked.filePath;
+    },
+    now: Date.now,
+    newId: () => randomBytes(4).toString('hex'),
+  });
+  room.on('file', (f) => files.onMessage(f.peer, f.name, f.msg));
+  const fileTick = setInterval(() => files.tick(), 1000);
   // Request gather: the Assist Me ping opens the workspace kept in launch.json.
   let launching = false;
   let lastLaunchAt = Number.NEGATIVE_INFINITY;
@@ -447,6 +513,11 @@ function start(): void {
   overlays.on('shared', (p: SharedPing) => {
     // Read even when nothing asks, so a release's modifiers never leak onto the ping after it.
     const held = overlays.takeReleaseMods();
+    // The Push slice sends a file now: nothing of it goes to the room as a ping.
+    if (p.id === FILE_SHARE_PING) {
+      void files.start();
+      return;
+    }
     const shared = toShared(overlays.numbered(), p.displayId, p.x, p.y);
     if (shared) room.sendPing(p.id, shared);
     if (p.id === AI_QUICK_PING) void aiPing.ping({ displayId: p.displayId, x: p.x, y: p.y });
@@ -500,7 +571,7 @@ function start(): void {
   const panelState = (view: PanelState['view'], vote: PanelState['vote'], voteOver = false): PanelState => ({
     view, lang: resolveLang(settings.language, app.getLocale()), max: MAX_MEMBERS, room: room.state(), history: history.lines(),
     vote, voteOver, textOn: featureOn(settings, 'roomText'), votesOn: featureOn(settings, 'roomVotes'),
-    volume: soundLevel(settings),
+    filePicking: false, volume: soundLevel(settings),
   });
   /** An open roster follows the room and its history; a hidden one ignores this. */
   function refreshRoster(): void {
@@ -528,9 +599,38 @@ function start(): void {
       case 'cancelShutdown':
         countdown.cancel();
         break;
+      case 'takeFile':
+      case 'cancelFile':
+        files.onAction(a);
+        break;
+      case 'fileTo':
+        // The member the roster was asked about: hand the answer back and get out of the way.
+        if (filePickResolve) {
+          const answer = filePickResolve;
+          filePickResolve = null;
+          panels.hideRoster();
+          answer(a.peer);
+        }
+        break;
       case 'expandAnswer':
         paintAnswer(a.expanded);
         break;
+      case 'answerTurn': {
+        // Paging keeps the card where it is: only the text and the counter change.
+        const turns = aiHistory.get();
+        const next = Math.max(0, Math.min(turns.length - 1, a.index));
+        if (next === answerIndex) break;
+        answerIndex = next;
+        paintAnswer(false);
+        break;
+      }
+      case 'followUp': {
+        const turn = aiHistory.get()[answerIndex];
+        if (answerSpot === null || turn === undefined) break;
+        // A follow-up continues the answer on screen, where the question was first asked.
+        openAsk(answerSpot, turn);
+        break;
+      }
       case 'dragAnswer':
         // The card is moved by the pointer, measured from where the drag started: one card, one anchor.
         if (a.start || answerDragFrom === null) answerDragFrom = answerAt;
@@ -643,14 +743,18 @@ function start(): void {
     postLine(lineDeps, { kind: 'alive', owner: 'self', tag: ownTag(), ...spot, text: text().aliveLine(who.name) });
     if (shared) room.sendAlive(peer, shared);
   };
-  /** The All In ping whose box is open: it is answered where that ping landed, with the screenshot taken on submit. */
-  let asking: { displayId: number; x: number; y: number } | null = null;
+  /**
+   * The question box that is open: where its ping landed, and the answer it follows up (null for a fresh question).
+   * Nothing is captured or sent until Enter, and the screenshot is taken at that moment.
+   */
+  let asking: { at: { displayId: number; x: number; y: number }; followUp: AiTurn | null } | null = null;
   registerTextWindow((raw, at, mode) => {
     if (mode === 'ask') {
-      // The question was typed: take the screenshot now, and let the deep ask answer where the ping went.
-      const spot = asking;
+      // The question was typed: take the screenshot now, and let the ask answer where the ping went. A follow-up keeps
+      // the mode of the answer it continues and carries that answer with it.
+      const open = asking;
       asking = null;
-      if (spot) void aiPing.ping(spot, true, raw);
+      if (open) void aiPing.ping(open.at, open.followUp?.deep ?? true, raw, open.followUp ?? undefined);
       return 'sent';
     }
     const input = parseTextInput(raw);
@@ -701,17 +805,22 @@ function start(): void {
       syncSuspended();
     }
   };
-  /** The All In ping landed: open the box for its question. Nothing is captured or sent until Enter. */
-  const openAsk = (at: { displayId: number; x: number; y: number }): void => {
+  /**
+   * Open the question box: for an All In ping that landed, or for a follow-up on the answer on show. Nothing is captured
+   * or sent until Enter.
+   */
+  const openAsk = (at: { displayId: number; x: number; y: number }, followUp: AiTurn | null = null): void => {
     if (textOpen || capturing) return;
     textOpen = true;
-    asking = at;
+    asking = { at, followUp };
     syncSuspended(); // the ping keys must not open a wheel while the question is being typed
     const t = text();
     try {
       openTextWindow(screen.getCursorScreenPoint(), {
         mode: 'ask', max: DEEP_PROMPT_MAX,
-        placeholder: t.aiAskPromptPlaceholder, hint: t.aiAskPromptHint, unknown: '', votesOff: '',
+        placeholder: followUp ? t.aiFollowUpPlaceholder : t.aiAskPromptPlaceholder,
+        hint: followUp ? t.aiFollowUpHint : t.aiAskPromptHint,
+        unknown: '', votesOff: '',
       });
     } catch (err) {
       console.warn('[ai]', err);
@@ -863,12 +972,16 @@ function start(): void {
     event.preventDefault();
     updater?.stop(); // aborts a download and drops a check in flight; an install that is quitting the app is left alone
     countdown.dispose(); // quitting lolPing calls the countdown off: nothing of ours shuts the machine down afterwards
+    clearInterval(fileTick);
+    files.dispose(); // a transfer that is half done is dropped, and its .part file with it
     room.quit(); // says bye, so the others see "left" instead of waiting for a timeout
     transfer.stop();
     stopWaitingForAccess();
     tray.destroy();
     panels.destroy();
     overlays.destroy();
-    void Promise.allSettled([bridge.stop(), store.flush(), launch.flush(), lan.whenClosed(), relay.whenClosed()]).then(() => app.exit(0));
+    void Promise.allSettled([
+    bridge.stop(), store.flush(), launch.flush(), aiHistory.flush(), lan.whenClosed(), relay.whenClosed(),
+  ]).then(() => app.exit(0));
   });
 }

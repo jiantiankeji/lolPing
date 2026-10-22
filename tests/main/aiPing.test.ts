@@ -13,7 +13,7 @@ function harness(over: Partial<AiPingDeps> = {}): {
   ai: AiPing;
   deps: AiPingDeps;
   shown: Array<{ displayId: number; x: number; y: number; text: string; owner: string; sticky?: boolean }>;
-  answers: Array<{ displayId: number; x: number; y: number; text: string }>;
+  answers: Array<{ displayId: number; x: number; y: number; text: string; question: string; deep: boolean }>;
   toasts: Array<{ title: string; body: string }>;
   captures: number[];
   asked: Array<{ key: string; prompt: string; jpeg: Uint8Array; deep: boolean }>;
@@ -23,7 +23,7 @@ function harness(over: Partial<AiPingDeps> = {}): {
   setNow(ms: number): void;
 } {
   const shown: Array<{ displayId: number; x: number; y: number; text: string; owner: string; sticky?: boolean }> = [];
-  const answers: Array<{ displayId: number; x: number; y: number; text: string }> = [];
+  const answers: Array<{ displayId: number; x: number; y: number; text: string; question: string; deep: boolean }> = [];
   const toasts: Array<{ title: string; body: string }> = [];
   const captures: number[] = [];
   const asked: Array<{ key: string; prompt: string; jpeg: Uint8Array; deep: boolean }> = [];
@@ -96,7 +96,7 @@ describe('AiPing', () => {
     expect(h.captures).toEqual([2]);
     expect(h.asked).toHaveLength(1);
     expect(h.asked[0]).toMatchObject({ key: 'sk-test', prompt: askPrompt('en'), jpeg: SHOT });
-    expect(h.answers).toEqual([{ ...SPOT, text: 'Wait for the wave.' }]);
+    expect(h.answers).toEqual([{ ...SPOT, text: 'Wait for the wave.', question: '', deep: false }]);
     // The answer is not a line of overlay text any more: it is a card that can be expanded.
     expect(h.shown).toEqual([]);
     expect(h.toasts).toHaveLength(0);
@@ -120,7 +120,7 @@ describe('AiPing', () => {
         owner: AI_THINKING_OWNER, sticky: true,
       },
     ]);
-    expect(h.answers).toEqual([{ ...SPOT, text: 'Wait for the wave.' }]);
+    expect(h.answers).toEqual([{ ...SPOT, text: 'Wait for the wave.', question: '', deep: true }]);
   });
 
   it('keeps that line up for the whole ask and clears it when the answer takes its place', async () => {
@@ -152,6 +152,22 @@ describe('AiPing', () => {
     const empty = harness();
     await empty.ai.ping(SPOT, true, '');
     expect(empty.asked[0].prompt).toBe(askPrompt('en'));
+  });
+
+  it('carries the answer it builds on when the question is a follow-up', async () => {
+    const h = harness();
+    await h.ai.ping(SPOT, true, 'and then?', { question: 'What is broken?', answer: 'Line 3 is missing a bracket.' });
+    const prompt = h.asked[0].prompt;
+    expect(prompt).toContain('What is broken?');
+    expect(prompt).toContain('Line 3 is missing a bracket.');
+    expect(prompt).toContain('and then?');
+    expect(prompt).toContain('Ignore any ping icon'); // still keeps the overlay out of the reading
+  });
+
+  it('remembers what was asked and how deep it was, so the card can page and a follow-up can continue it', async () => {
+    const h = harness();
+    await h.ai.ping(SPOT, true, 'why?');
+    expect(h.answers[0]).toMatchObject({ question: 'why?', deep: true });
   });
 
   it('leaves the quick question alone, whatever was typed for the deep one', async () => {

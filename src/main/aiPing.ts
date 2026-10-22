@@ -1,4 +1,4 @@
-import { askPrompt, deepPrompt } from '../shared/aiAsk';
+import { askPrompt, deepPrompt, followUpPrompt } from '../shared/aiAsk';
 import type { Lang, Strings } from '../shared/i18n';
 import type { Settings } from '../shared/settings';
 import type { VisionFailure, VisionResult } from './deepseekVision';
@@ -19,7 +19,7 @@ export interface AiPingDeps {
   /** Draws a line on the display the ping went to: the pending one while a deep ask runs. */
   show(p: { displayId: number; x: number; y: number; text: string; owner: string; sticky?: boolean }): void;
   /** Puts the answer on screen in full, at the ping, with the buttons to expand it and to close it. */
-  answer(p: { displayId: number; x: number; y: number; text: string }): void;
+  answer(p: { displayId: number; x: number; y: number; text: string; question: string; deep: boolean }): void;
   /** Takes down an answer left over from an earlier ask. */
   closeAnswer(): void;
   /** Takes down every line of one owner, on every display. */
@@ -42,9 +42,14 @@ export class AiPing {
 
   constructor(private readonly deps: AiPingDeps, private readonly minGapMs = AI_MIN_GAP_MS) {}
 
-  /** Never throws: every failure ends in a toast. `deep` asks the model to think, and `question` is what the user typed
-   * in the box; without one the built-in question goes out. */
-  async ping(p: { displayId: number; x: number; y: number }, deep = false, question = ''): Promise<void> {
+  /** Never throws: every failure ends in a toast. `deep` asks the model to think, `question` is what the user typed in
+   * the box, and `previous` is the answer this ask builds on (a follow-up). Without a question the built-in one goes. */
+  async ping(
+    p: { displayId: number; x: number; y: number },
+    deep = false,
+    question = '',
+    previous?: { question: string; answer: string },
+  ): Promise<void> {
     const { aiAsk, deepseekKey } = this.deps.settings();
     if (!aiAsk) return;
     const t = this.deps.text();
@@ -77,9 +82,11 @@ export class AiPing {
         });
         pendingUp = true;
       }
-      // The deep ask sends the question typed in the box, or the built-in one when it was sent empty.
+      // A follow-up carries the answer it builds on; anything else is a fresh question, deep or quick.
       const lang = this.deps.lang();
-      const prompt = deep ? deepPrompt(question, lang) : askPrompt(lang);
+      const prompt = previous
+        ? followUpPrompt(question, previous, lang)
+        : deep ? deepPrompt(question, lang) : askPrompt(lang);
       const answer = await this.deps.vision({ key: deepseekKey, prompt, jpeg, deep });
       if (pendingUp) {
         this.deps.clearText(AI_THINKING_OWNER);
@@ -87,7 +94,7 @@ export class AiPing {
         pendingUp = false;
       }
       if (!answer.ok) this.fail(answer.kind, t);
-      else this.deps.answer({ displayId: p.displayId, x: p.x, y: p.y, text: answer.text });
+      else this.deps.answer({ displayId: p.displayId, x: p.x, y: p.y, text: answer.text, question, deep });
     } finally {
       this.busy = false;
       // A pending line and a held ping must never outlive their question, however the ask ended.

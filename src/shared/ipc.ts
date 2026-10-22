@@ -1,4 +1,6 @@
 import type { EmoteArt, EmoteFile, EmoteRef, ImportResult, SoundResult } from './emotes';
+import type { TransferState } from './fileShare';
+export type { TransferState };
 import type { Lang } from './i18n';
 import type { PingId } from './pings';
 import type { Platform } from './platform';
@@ -108,6 +110,8 @@ export interface PanelState {
   /** The room text and room votes feature switches. */
   textOn: boolean;
   votesOn: boolean;
+  /** The ping asked who should get a file: every other row offers itself. */
+  filePicking: boolean;
   /** The ping sound volume, 0 to 1 (0 when muted): the ready check's sounds play at it. */
   volume: number;
 }
@@ -133,10 +137,15 @@ export interface AnswerState {
   text: string;
   /** Showing all of it: the window is larger and the text scrolls. */
   expanded: boolean;
+  /** Which stored turn is on show: 0 is the one that just arrived, and higher numbers are older. */
+  index: number;
+  /** How many turns there are to page through. */
+  count: number;
 }
 
 /** What a panel window receives: the room's panels, the shutdown countdown, or an AI answer. */
-export type PanelMessage = PanelState | CountdownState | AnswerState;
+/** What a panel window receives: the room's panels, the shutdown countdown, an AI answer, or a file transfer. */
+export type PanelMessage = PanelState | CountdownState | AnswerState | TransferState;
 
 /** What a click in a panel window asks for. An `alive` line is placed at the cursor by the app, not by the page. */
 export type PanelAction =
@@ -148,7 +157,16 @@ export type PanelAction =
   | { t: 'cancelShutdown' }
   | { t: 'expandAnswer'; expanded: boolean }
   | { t: 'dragAnswer'; dx: number; dy: number; start: boolean }
-  | { t: 'closeAnswer' };
+  /** Show an older or newer stored answer: the index it asks for, clamped by the main process. */
+  | { t: 'answerTurn'; index: number }
+  /** Ask again, building on the answer on show. */
+  | { t: 'followUp' }
+  | { t: 'closeAnswer' }
+  /** The transfer card: take what is offered, or call it off. */
+  | { t: 'takeFile'; took: boolean }
+  | { t: 'cancelFile' }
+  /** A member chosen as the one that gets the file. */
+  | { t: 'fileTo'; peer: string };
 
 export interface PanelApi {
   /** Calls `cb` with every state the main process sends; returns the way to stop. */
@@ -180,8 +198,18 @@ export function parsePanelAction(raw: unknown): PanelAction | null {
     case 'dragAnswer':
       return isNum(a.dx) && isNum(a.dy) && typeof a.start === 'boolean'
         ? { t: 'dragAnswer', dx: a.dx, dy: a.dy, start: a.start } : null;
+    case 'answerTurn':
+      return isNum(a.index) && Number.isInteger(a.index) ? { t: 'answerTurn', index: a.index } : null;
+    case 'followUp':
+      return { t: 'followUp' };
     case 'closeAnswer':
       return { t: 'closeAnswer' };
+    case 'takeFile':
+      return typeof a.took === 'boolean' ? { t: 'takeFile', took: a.took } : null;
+    case 'cancelFile':
+      return { t: 'cancelFile' };
+    case 'fileTo':
+      return isPeer(a.peer) ? { t: 'fileTo', peer: a.peer } : null;
     default:
       return null;
   }

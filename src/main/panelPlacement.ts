@@ -8,9 +8,11 @@ export const ROSTER_SIZE = { width: 720, height: 470 };
 /** The shutdown countdown: a card small enough to sit in the middle without hiding what is behind it. */
 export const COUNTDOWN_SIZE = { width: 320, height: 176 };
 /** The answer card: a few lines of it, and the two buttons that are always on it. */
-export const ANSWER_SIZE = { width: 420, height: 128 };
+export const ANSWER_SIZE = { width: 440, height: 150 };
 /** The same card showing all of the answer, tall enough to read and to scroll. */
 export const ANSWER_EXPANDED_SIZE = { width: 600, height: 440 };
+/** The transfer card: someone's offer to answer, or a bar with two names. */
+export const TRANSFER_SIZE = { width: 400, height: 172 };
 
 const EDGE_GAP = 16;
 /** How far down the display the surrender widget starts, like League's. */

@@ -1,4 +1,5 @@
 import { ANNOUNCED_MAX, HASH_RE, isEmoteFx, isEmoteRefShape, type EmoteRef } from './emotes';
+import { FILE_MAX_BYTES, MAX_FILE_NAME, MAX_PARTS, PART_B64_MAX, TRANSFER_ID_RE, partCount } from './fileShare';
 import { isPingId, type PingId } from './pings';
 import { isTagColor, isTagRgb, type TagRgb } from './roomColors';
 
@@ -111,7 +112,76 @@ export interface ChunkMsg extends Base {
 export interface ByeMsg extends Base {
   t: 'bye';
 }
-export type RoomMessage = PresenceMsg | PingMsg | EmoteMsg | TextMsg | AliveMsg | VoteMsg | BallotMsg | WantMsg | ChunkMsg | ByeMsg;
+
+/**
+ * Added in 0.6.0: one file, offered to one member (`to`). Older apps drop it as an unknown type, so an offer to one
+ * of them simply times out. The transfer itself is point to point: parts travel to that member alone.
+ */
+export interface OfferMsg extends Base {
+  t: 'offer';
+  to: string;
+  /** 8 lower-case hex characters the sender picked; every message of this transfer carries it. */
+  id: string;
+  /** The name the receiver sees and saves under, already free of any directory part. */
+  name: string;
+  /** Bytes in the file. */
+  size: number;
+  /** How many parts it is cut into (`partCount(size)`), so the receiver knows what it is in for. */
+  n: number;
+}
+/** Yes or no to an offer. `took` false is a refusal, and the sender stops there. */
+export interface AcceptMsg extends Base {
+  t: 'accept';
+  to: string;
+  id: string;
+  took: boolean;
+}
+/** One slice `i` of the file, base64 in `b`. Sent to the member that said yes, never broadcast. */
+export interface PartMsg extends Base {
+  t: 'part';
+  id: string;
+  i: number;
+  b: string;
+}
+/** The next part the receiver expects: every part below `next` is in hand and written. */
+export interface AckMsg extends Base {
+  t: 'ack';
+  to: string;
+  id: string;
+  next: number;
+}
+/** The last part is out: sha256 of the whole file, 64 lower-case hex, for the receiver to check what it wrote. */
+export interface SealMsg extends Base {
+  t: 'seal';
+  id: string;
+  sha: string;
+}
+/** The receiver's verdict on what it wrote: `ok` false means the checksum did not match or the disk refused. */
+export interface FinishMsg extends Base {
+  t: 'finish';
+  to: string;
+  id: string;
+  ok: boolean;
+}
+/** Either side calling it off: refused, cancelled, or out of room. */
+export interface AbortMsg extends Base {
+  t: 'abort';
+  id: string;
+}
+
+/** Every message one file transfer uses. They are point to point: `part` and `seal` go to the receiver alone. */
+export type FileMsg = OfferMsg | AcceptMsg | PartMsg | AckMsg | SealMsg | FinishMsg | AbortMsg;
+
+const FILE_TYPES: ReadonlySet<string> = new Set(['offer', 'accept', 'part', 'ack', 'seal', 'finish', 'abort']);
+
+/** True for the messages a file transfer owns, which take their own budget and never carry a point on screen. */
+export function isFileMessage(msg: RoomMessage): msg is FileMsg {
+  return FILE_TYPES.has(msg.t);
+}
+
+export type RoomMessage =
+  | PresenceMsg | PingMsg | EmoteMsg | TextMsg | AliveMsg | VoteMsg | BallotMsg | WantMsg | ChunkMsg | ByeMsg
+  | OfferMsg | AcceptMsg | PartMsg | AckMsg | SealMsg | FinishMsg | AbortMsg;
 
 // C0/C1 controls, zero-width characters, bidi marks, embeddings and isolates, BOM, line/paragraph separators,
 // soft hyphen, combining grapheme joiner, Arabic letter mark, Mongolian vowel separator and the Hangul fillers
@@ -246,6 +316,53 @@ export function validateMessage(raw: unknown): RoomMessage | null {
     }
     case 'bye':
       return { t, ...base };
+    case 'offer': {
+      const { to, id, name, size, n } = raw;
+      if (typeof to !== 'string' || !PEER_RE.test(to)) return null;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id)) return null;
+      if (typeof name !== 'string' || name.trim() === '' || name.length > MAX_FILE_NAME) return null;
+      if (!isUint(size) || size === 0 || size > FILE_MAX_BYTES) return null;
+      // The count has to match the size, or the receiver would reserve room for a different file.
+      if (!isUint(n) || n !== partCount(size as number)) return null;
+      return { t, ...base, to, id, name, size: size as number, n: n as number };
+    }
+    case 'accept': {
+      const { to, id, took } = raw;
+      if (typeof to !== 'string' || !PEER_RE.test(to)) return null;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id) || typeof took !== 'boolean') return null;
+      return { t, ...base, to, id, took };
+    }
+    case 'part': {
+      const { id, i, b } = raw;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id)) return null;
+      if (!isUint(i) || (i as number) >= MAX_PARTS) return null;
+      if (typeof b !== 'string' || b.length > PART_B64_MAX || b.length % 4 !== 0 || !B64_RE.test(b)) return null;
+      return { t, ...base, id, i: i as number, b };
+    }
+    case 'ack': {
+      const { to, id, next } = raw;
+      if (typeof to !== 'string' || !PEER_RE.test(to)) return null;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id)) return null;
+      if (!isUint(next) || (next as number) > MAX_PARTS) return null;
+      return { t, ...base, to, id, next: next as number };
+    }
+    case 'seal': {
+      const { id, sha } = raw;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id)) return null;
+      if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return null;
+      return { t, ...base, id, sha };
+    }
+    case 'finish': {
+      const { to, id, ok } = raw;
+      if (typeof to !== 'string' || !PEER_RE.test(to)) return null;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id) || typeof ok !== 'boolean') return null;
+      return { t, ...base, to, id, ok };
+    }
+    case 'abort': {
+      const { id } = raw;
+      if (typeof id !== 'string' || !TRANSFER_ID_RE.test(id)) return null;
+      return { t, ...base, id };
+    }
     default:
       return null;
   }

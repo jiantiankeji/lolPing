@@ -17,6 +17,11 @@ describe('parsePanelAction', () => {
     expect(parsePanelAction({ t: 'closeAnswer' })).toEqual({ t: 'closeAnswer' });
     expect(parsePanelAction({ t: 'dragAnswer', dx: -12.5, dy: 40, start: false }))
       .toEqual({ t: 'dragAnswer', dx: -12.5, dy: 40, start: false });
+    expect(parsePanelAction({ t: 'answerTurn', index: 2 })).toEqual({ t: 'answerTurn', index: 2 });
+    expect(parsePanelAction({ t: 'followUp' })).toEqual({ t: 'followUp' });
+    expect(parsePanelAction({ t: 'takeFile', took: false })).toEqual({ t: 'takeFile', took: false });
+    expect(parsePanelAction({ t: 'cancelFile' })).toEqual({ t: 'cancelFile' });
+    expect(parsePanelAction({ t: 'fileTo', peer })).toEqual({ t: 'fileTo', peer });
   });
 
   it('refuses anything that is not an object with a known type', () => {
@@ -39,6 +44,11 @@ describe('parsePanelAction', () => {
     expect(parsePanelAction({ t: 'dragAnswer', dx: 1, dy: 2 })).toBeNull();
     expect(parsePanelAction({ t: 'dragAnswer', dx: 'a', dy: 2, start: true })).toBeNull();
     expect(parsePanelAction({ t: 'dragAnswer', dx: 1, dy: Number.NaN, start: true })).toBeNull();
+    expect(parsePanelAction({ t: 'answerTurn' })).toBeNull();
+    expect(parsePanelAction({ t: 'answerTurn', index: 1.5 })).toBeNull();
+    expect(parsePanelAction({ t: 'takeFile' })).toBeNull();
+    expect(parsePanelAction({ t: 'takeFile', took: 1 })).toBeNull();
+    expect(parsePanelAction({ t: 'fileTo', peer: 'nope' })).toBeNull();
     expect(parsePanelAction({ t: 'ballot', yes: 'yes' })).toBeNull();
   });
 

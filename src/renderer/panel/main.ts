@@ -3,6 +3,7 @@ import { dropAnswer, renderAnswer } from './answer';
 import { renderCountdown } from './countdown';
 import { dropReady, renderReady } from './readyCheck';
 import { renderRoster } from './roster';
+import { dropTransfer, renderTransfer } from './transfer';
 import { renderVote } from './vote';
 
 const root = document.getElementById('root') as HTMLElement;
@@ -10,6 +11,12 @@ const root = document.getElementById('root') as HTMLElement;
 window.panelApi.on((state) => {
   document.body.dataset.view = state.view;
   const act = (action: PanelAction): void => window.panelApi.act(action);
+  if (state.view === 'transfer') {
+    dropReady();
+    dropAnswer();
+    return renderTransfer(root, state, act);
+  }
+  dropTransfer();
   if (state.view === 'answer') {
     dropReady();
     return renderAnswer(root, state, act);
