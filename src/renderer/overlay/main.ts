@@ -10,6 +10,8 @@ import {
 import type { PingTag } from '../../shared/ipc';
 import type { WheelKind } from '../../shared/protocol';
 import { DEFAULT_SETTINGS, overlaySettings, soundLevel, type OverlaySettings } from '../../shared/settings';
+import { resolveLang, strings } from '../../shared/i18n';
+import { emoteName } from '../../shared/emotes';
 import '../shared/emoteFx.css';
 import { EmoteStage } from './emoteStage';
 import { spawnPing } from './pingFx';
@@ -17,7 +19,7 @@ import { SoundBank } from './soundBank';
 import { showToast } from './toast';
 import { TextStage } from './textFx';
 import { Wheel } from './wheel';
-import { centerIcons, emoteItem, pingItem } from './wheelItems';
+import { emoteItem, pingItem } from './wheelItems';
 
 const pingLayer = document.getElementById('pings') as HTMLElement;
 const toastLayer = document.getElementById('toasts') as HTMLElement;
@@ -42,9 +44,9 @@ const volume = (): number => soundLevel(settings);
 const tick = (): void => {
   if (settings.tickSound) sounds.play(TICK_SOUND, volume() * 0.5);
 };
-const centers = centerIcons(settings);
-const pingWheel = new Wheel(pingSvg, 'PING', centers.ping, tick);
-const emoteWheel = new Wheel(emoteSvg, 'EMOTE', centers.emote, tick);
+const t0 = strings(resolveLang(settings.language, navigator.language));
+const pingWheel = new Wheel(pingSvg, t0.wheelBack, tick);
+const emoteWheel = new Wheel(emoteSvg, t0.wheelBack, tick);
 
 /** This machine's own emotes: the settings know what an imported one looks like, whether it moves and has a sound. */
 function localArt(ref: EmoteRef): EmoteArt {
@@ -78,11 +80,10 @@ function applySettings(s: OverlaySettings): void {
   if (!s.holdPingId) releaseHeldPing();
   pingWheel.setSize(s.wheelSizePx);
   emoteWheel.setSize(s.wheelSizePx);
-  pingWheel.setItems(pingsFor(s.wheel).map(pingItem));
-  emoteWheel.setItems(s.emoteWheel.map((ref) => emoteItem(ref, s.customEmotes)));
-  const { ping, emote } = centerIcons(s);
-  pingWheel.setCenterIcon(ping);
-  emoteWheel.setCenterIcon(emote);
+  // What the middle of each wheel names: the slice the pointer is on, in the language in force.
+  const t = strings(resolveLang(s.language, navigator.language));
+  pingWheel.setItems(pingsFor(s.wheel).map((p) => pingItem(p, t.pingNames[p.id])));
+  emoteWheel.setItems(s.emoteWheel.map((ref) => emoteItem(ref, s.customEmotes, emoteName(ref, t.lang, s.customEmotes))));
 }
 applySettings(settings);
 

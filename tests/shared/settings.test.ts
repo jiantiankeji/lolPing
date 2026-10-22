@@ -551,6 +551,7 @@ describe('helpers', () => {
       wheelSizePx: 600, wheel: ['danger', 'push', 'omw', 'allin', 'assist', 'needvision', 'missing', 'enemyvision'], clickPingId: 'generic',
       emoteWheel: [...DEFAULT_EMOTE_WHEEL], clickEmoteId: DEFAULT_CLICK_EMOTE, emoteSizePx: 150, emoteSound: true, customEmotes: [],
       holdPingId: null, // no key in the defaults, so nothing is held until one is set
+      language: 'auto', // the wheel names what is under the pointer, so it needs the language too
     });
   });
 

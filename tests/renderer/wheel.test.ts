@@ -30,8 +30,8 @@ function makeWheel(id = 'wheel') {
   const svg = new FakeElement();
   svg.id = id;
   const hover = vi.fn();
-  const wheel = new Wheel(svg as unknown as SVGSVGElement, 'WHEEL', 'icon.png', hover);
-  wheel.setItems(Array.from({ length: 8 }, (_, i) => ({ key: String(i), icon: `${i}.png` })));
+  const wheel = new Wheel(svg as unknown as SVGSVGElement, 'Back', hover);
+  wheel.setItems(Array.from({ length: 8 }, (_, i) => ({ key: String(i), icon: `${i}.png`, label: `L${i}` })));
   return { wheel, svg, hover };
 }
 
@@ -109,13 +109,55 @@ describe('wheel size', () => {
 });
 
 describe('wheel centre', () => {
-  it('swaps the centre icon without touching the slices', () => {
+  it('keeps nothing in the middle until the pointer is on a slice', () => {
     const { wheel, svg } = makeWheel();
-    const hrefs = (): string[] => svg.children.filter((c) => c.attrs.has('href')).map((c) => c.attrs.get('href') as string);
-    expect(hrefs()).toContain('icon.png');
-    wheel.setCenterIcon('other.png');
-    expect(hrefs()).toContain('other.png');
-    expect(hrefs()).not.toContain('icon.png');
-    expect(hrefs().filter((h) => /^\d\.png$/.test(h))).toHaveLength(8);
+    const hub = (): FakeElement | undefined => svg.children.find((c) => c.attrs.get('class') === 'hub');
+    const centre = (): string =>
+      svg.children.find((c) => c.attrs.get('class') === 'centerTxt')?.textContent ?? '';
+    expect(hub()?.attrs.has('href')).toBe(false);
+    expect(centre()).toBe('');
+    wheel.open(0, 0);
+    expect(hub()?.attrs.has('href')).toBe(false);
+  });
+
+  it('shows the slice under the pointer, icon and name, and empties again when it closes', () => {
+    const { wheel, svg } = makeWheel();
+    const hub = (): FakeElement | undefined => svg.children.find((c) => c.attrs.get('class') === 'hub');
+    const centre = (): string =>
+      svg.children.find((c) => c.attrs.get('class') === 'centerTxt')?.textContent ?? '';
+    wheel.open(0, 0);
+    wheel.move(0, -((WHEEL.innerR + WHEEL.outerR) / 2)); // straight up: the first slice
+    expect(hub()?.attrs.get('href')).toBe('0.png');
+    expect(centre()).toBe('L0');
+    wheel.cancel();
+    expect(hub()?.attrs.has('href')).toBe(false);
+    expect(centre()).toBe('');
+  });
+
+  it('goes back to bare in the dead zone, the way League does', () => {
+    const { wheel, svg } = makeWheel();
+    const hub = (): FakeElement | undefined => svg.children.find((c) => c.attrs.get('class') === 'hub');
+    const centre = (): string =>
+      svg.children.find((c) => c.attrs.get('class') === 'centerTxt')?.textContent ?? '';
+    wheel.open(0, 0);
+    wheel.move(0, -((WHEEL.innerR + WHEEL.outerR) / 2));
+    expect(centre()).toBe('L0');
+    wheel.move(0, 0); // the middle: nothing would be placed
+    expect(hub()?.attrs.has('href')).toBe(false);
+    expect(centre()).toBe('');
+  });
+
+  it('cuts a long name so it cannot run past the ring', () => {
+    const { wheel, svg } = makeWheel();
+    wheel.setItems([
+      { key: 'long', icon: 'long.png', label: 'Upside-down Missing' },
+      ...Array.from({ length: 7 }, (_, i) => ({ key: String(i), icon: `${i}.png`, label: `L${i}` })),
+    ]);
+    const centre = (): string =>
+      svg.children.find((c) => c.attrs.get('class') === 'centerTxt')?.textContent ?? '';
+    wheel.open(0, 0);
+    wheel.move(0, -((WHEEL.innerR + WHEEL.outerR) / 2));
+    expect(centre()).toHaveLength(14);
+    expect(centre().endsWith('…')).toBe(true);
   });
 });

@@ -392,7 +392,7 @@ export function triggerLabel(t: TriggerKey, lang: Lang = 'en', platform: Platfor
 export type OverlaySettings = Pick<
   Settings,
   'pingSizePx' | 'pingDurationS' | 'keepLastPing' | 'volume' | 'muted' | 'tickSound' | 'wheelSizePx' | 'wheel' | 'clickPingId'
-  | 'emoteWheel' | 'clickEmoteId' | 'emoteSizePx' | 'emoteSound' | 'customEmotes'
+  | 'emoteWheel' | 'clickEmoteId' | 'emoteSizePx' | 'emoteSound' | 'customEmotes' | 'language'
 > & {
   /**
    * The ping the overlay keeps on screen until it is told otherwise: the AI's deep ping, whose thinking outlasts the
@@ -410,4 +410,6 @@ export const overlaySettings = (s: Settings): OverlaySettings => ({
   emoteWheel: [...s.emoteWheel], clickEmoteId: s.clickEmoteId, emoteSizePx: s.emoteSizePx, emoteSound: s.emoteSound,
   customEmotes: s.customEmotes.map((c) => ({ ...c })),
   holdPingId: s.aiAsk && s.deepseekKey !== '' ? AI_DEEP_PING : null,
+  // The wheel names what is under the pointer, so the overlay needs the language the app is showing.
+  language: s.language,
 });

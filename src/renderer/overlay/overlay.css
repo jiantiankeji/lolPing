@@ -15,7 +15,7 @@ html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background:
   filter: grayscale(1) sepia(.75) saturate(1.3) brightness(1.15);
 }
 #wheel .icon.hot, #emoteWheel .icon.hot { filter: none; transform: scale(1.18); }
-#wheel .centerTxt, #emoteWheel .centerTxt { font: 600 15px "Segoe UI", sans-serif; letter-spacing: 1px; fill: #1fa9e0; }
+#wheel .centerTxt, #emoteWheel .centerTxt { font: 600 13px "Segoe UI", sans-serif; letter-spacing: .5px; fill: #1fa9e0; }
 #wheel .backTxt, #emoteWheel .backTxt { font: 600 9px "Segoe UI", sans-serif; fill: #6c7a7c; letter-spacing: .5px; }
 /* Emote art is square: draw it round, like the League emote wheel. It keeps its own colours (only ping icons are tinted
    until hovered), so the hot slice shows by its wedge and the larger icon. */

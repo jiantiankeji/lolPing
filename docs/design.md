@@ -205,7 +205,7 @@ All coordinates are **physical screen pixels**.
 | Wedge dividers | thin gold-tinted lines |
 
 - **Slots:** each slice shows the ping from the `wheel` setting; the overlay redraws the icons when it changes.
-- **Center content:** the generic-ping icon, a "PING" label in `#1fa9e0`, and a dim "BACK" hint with a right-click mouse glyph.
+- **Center content:** a preview, not a fixture — it shows the icon and the name of the slice under the pointer, and nothing at all when the pointer is in the dead zone or the wheel is closed, the way League's wheel behaves. The name is in the language in force (`OverlaySettings.language`, resolved against `navigator.language` in the overlay) and cut to 14 characters (`centerName`) so a long one cannot spill out of the 86 px disc. The dim "BACK" hint and its right-click mouse glyph stay: they describe the gesture, not the selection.
 - **Icons:** 48 px at radius 137. Idle icons are desaturated gold (`grayscale(1) sepia(.75) saturate(1.3) brightness(1.15)`). The hovered slice shows the full-colour icon at 1.18× scale and a brightened wedge.
 - **Selection:**
   - The slice is picked from the angle between the press point and the cursor, in 45° sectors centered on N, NE, …

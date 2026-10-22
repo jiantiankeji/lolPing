@@ -20,20 +20,33 @@ function sector(r0: number, r1: number, a0: number, a1: number): string {
   return `M${x0},${y0} L${x1},${y1} A${r1},${r1} 0 0 1 ${x2},${y2} L${x3},${y3} A${r0},${r0} 0 0 0 ${x0},${y0}Z`;
 }
 
-/** One slice: `key` is what release() hands back, `icon` the image URL drawn in the slice. */
+/** The most characters the middle can show: any more would run past the ring at that size. */
+const MAX_CENTER_CHARS = 14;
+
+/** A slice's name as the middle shows it, cut so a long one cannot spill out of the circle. */
+export function centerName(label: string, max = MAX_CENTER_CHARS): string {
+  const chars = [...label];
+  return chars.length > max ? `${chars.slice(0, max - 1).join('')}…` : label;
+}
+
+/** One slice: `key` is what release() hands back, `icon` the image URL drawn in the slice, `label` its name. */
 export interface WheelItem {
   key: string;
   icon: string;
+  /** Shown in the middle of the wheel while the pointer is on this slice: empty leaves the middle bare. */
+  label: string;
 }
 
 /**
  * The League-style wheel (see prototype/wheel-demo.html), for pings or emotes: the slices are whatever items it is given.
- * Each wheel draws into its own svg, whose id keeps its gradient ids apart from the other wheel's.
+ * Each wheel draws into its own svg, whose id keeps its gradient ids apart from the other wheel's. The middle is a
+ * preview, not a fixture: it shows what the pointer is over, and nothing at all when the pointer is not over a slice.
  */
 export class Wheel {
   private readonly wedges: SVGPathElement[] = [];
   private readonly icons: SVGImageElement[] = [];
   private hub: SVGImageElement | null = null;
+  private hubText: SVGTextElement | null = null;
   private items: readonly WheelItem[] = [];
   private hot = -1;
   private ox = 0;
@@ -43,8 +56,7 @@ export class Wheel {
 
   constructor(
     private readonly svg: SVGSVGElement,
-    private readonly centerLabel: string,
-    private readonly centerIcon: string,
+    private readonly backLabel: string,
     private readonly onHover: (slice: number) => void,
   ) {
     this.build();
@@ -58,11 +70,8 @@ export class Wheel {
       if (item) icon.setAttribute('href', item.icon);
       else icon.removeAttribute('href');
     });
-  }
-
-  /** Changes the icon in the middle of the wheel. */
-  setCenterIcon(url: string): void {
-    this.hub?.setAttribute('href', url);
+    // The names changed under the pointer: the middle follows.
+    this.showCenter(this.hot >= 0 ? items[this.hot] ?? null : null);
   }
 
   /** Scales the SVG and its dead zone together, keeping the press point at the centre. */
@@ -123,6 +132,20 @@ export class Wheel {
       this.icons[i].classList.add('hot');
       if (this.opened) this.onHover(i);
     }
+    // The middle is a preview of what the pointer is on: no pointer, no preview.
+    this.showCenter(i >= 0 ? this.items[i] ?? null : null);
+  }
+
+  /** Draws a slice's icon and name in the middle, or empties it: the wheel keeps nothing there of its own. */
+  private showCenter(item: WheelItem | null): void {
+    if (!this.hub || !this.hubText) return;
+    if (item) {
+      this.hub.setAttribute('href', item.icon);
+      this.hubText.textContent = centerName(item.label);
+    } else {
+      this.hub.removeAttribute('href');
+      this.hubText.textContent = '';
+    }
   }
 
   private build(): void {
@@ -162,9 +185,9 @@ export class Wheel {
     el('circle', { r: innerR + 4, fill: 'none', stroke: '#1a1a1a', 'stroke-width': 6, opacity: 0.6 }, svg);
     el('circle', { r: innerR, fill: `url(#${id}-core)`, stroke: '#c8aa6e', 'stroke-width': 3 }, svg);
     el('circle', { r: innerR - 7, fill: 'none', stroke: '#8a7448', 'stroke-width': 1, opacity: 0.6 }, svg);
-    this.hub = el('image', { href: this.centerIcon, x: -20, y: -58, width: 40, height: 40, class: 'hub' }, svg);
-    el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt' }, svg).textContent = this.centerLabel;
-    el('text', { x: 6, y: 50, 'text-anchor': 'middle', class: 'backTxt' }, svg).textContent = 'BACK';
+    this.hub = el('image', { x: -20, y: -58, width: 40, height: 40, class: 'hub' }, svg);
+    this.hubText = el('text', { x: 0, y: 6, 'text-anchor': 'middle', class: 'centerTxt' }, svg);
+    el('text', { x: 6, y: 50, 'text-anchor': 'middle', class: 'backTxt' }, svg).textContent = this.backLabel;
     const mouse = el('g', { opacity: 0.55, transform: 'translate(-26,40)' }, svg);
     el('rect', { x: 0, y: 0, width: 11, height: 16, rx: 5.5, fill: 'none', stroke: '#6c7a7c', 'stroke-width': 1.3 }, mouse);
     el('path', { d: 'M5.5,0 V7 H11 V5.5 A5.5,5.5 0 0 0 5.5,0Z', fill: '#6c7a7c' }, mouse);
