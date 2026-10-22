@@ -146,8 +146,16 @@ describe('SettingsStore', () => {
     // Well inside the debounce window: an immediate (or ignored-debounce) write would have landed by now.
     await sleep(25);
     expect(existsSync(join(dir, 'settings.json'))).toBe(false);
-    await sleep(150);
-    expect(JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')).volume).toBe(20);
+    // Then wait for the write itself: a fixed sleep here fails on a loaded machine.
+    const written = (): unknown => {
+      try {
+        return (JSON.parse(readFileSync(join(dir, 'settings.json'), 'utf8')) as { volume?: number }).volume;
+      } catch {
+        return null;
+      }
+    };
+    await waitFor(() => written() === 20);
+    expect(written()).toBe(20);
   });
 
   it('still falls back to defaults when the corrupt file cannot be backed up', () => {
