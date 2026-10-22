@@ -26,9 +26,11 @@ export function transferView(state: TransferState): TransferView {
   const size = formatSize(state.size);
   const asking = state.phase === 'ask';
   const title =
-    state.phase === 'ask' ? t.fileAskTitle(state.peerName)
-      : state.phase === 'sending' ? t.fileSendTitle(state.peerName)
-        : t.fileReceiveTitle(state.peerName);
+    state.phase === 'ask'
+      ? (state.peerName === '' ? t.fileAskAnon : t.fileAskTitle(state.peerName))
+      : state.phase === 'sending'
+        ? t.fileSendTitle(state.peerName)
+        : (state.peerName === '' ? t.fileReceiveAnon : t.fileReceiveTitle(state.peerName));
   const detail = state.phase === 'done' || state.phase === 'failed'
     ? `${state.fileName} · ${size} · ${t.fileResult(state.result ?? 'failed')}`
     : `${state.fileName} · ${size} · ${percent}%`;

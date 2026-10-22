@@ -456,7 +456,9 @@ function start(): void {
   const files = new FileShares({
     lang: () => resolveLang(settings.language, app.getLocale()),
     text,
-    send: (peer, body) => room.sendToLan(peer, body),
+    // The room knows where a member is and which port their listener took; a file goes there over TCP.
+    target: (peer) => room.fileTarget(peer),
+    key: () => room.messageKey(),
     show: (state) => {
       if (state) panels.showTransfer(state);
       else panels.hideTransfer();
@@ -475,11 +477,29 @@ function start(): void {
       const picked = await dialog.showSaveDialog({ defaultPath: join(app.getPath('downloads'), name) });
       return picked.canceled || picked.filePath === '' ? null : picked.filePath;
     },
-    now: Date.now,
-    newId: () => randomBytes(4).toString('hex'),
   });
-  room.on('file', (f) => files.onMessage(f.peer, f.name, f.msg));
-  const fileTick = setInterval(() => files.tick(), 1000);
+  // A file can only arrive while we are in a room: the listener starts with the room and closes with it.
+  const openFileListener = async (): Promise<void> => {
+    const key = room.messageKey();
+    if (key === null) return;
+    try {
+      const port = await files.listen(key);
+      room.setFilePort(port);
+    } catch (err) {
+      console.warn('[files]', err);
+    }
+  };
+  let listeningIn: string | null = null;
+  room.on('state', () => {
+    const phase = room.state().phase;
+    if (phase === 'active' && listeningIn === null) {
+      listeningIn = 'active';
+      void openFileListener();
+    } else if (phase !== 'active' && listeningIn !== null) {
+      listeningIn = null;
+      files.stop();
+    }
+  });
   // Request gather: the Assist Me ping opens the workspace kept in launch.json.
   let launching = false;
   let lastLaunchAt = Number.NEGATIVE_INFINITY;
@@ -600,8 +620,11 @@ function start(): void {
         countdown.cancel();
         break;
       case 'takeFile':
+        // The receiver answers before a byte moves: a refusal ends it there.
+        if (!a.took) files.cancel();
+        break;
       case 'cancelFile':
-        files.onAction(a);
+        files.cancel();
         break;
       case 'fileTo':
         // The member the roster was asked about: hand the answer back and get out of the way.
@@ -972,7 +995,6 @@ function start(): void {
     event.preventDefault();
     updater?.stop(); // aborts a download and drops a check in flight; an install that is quitting the app is left alone
     countdown.dispose(); // quitting lolPing calls the countdown off: nothing of ours shuts the machine down afterwards
-    clearInterval(fileTick);
     files.dispose(); // a transfer that is half done is dropped, and its .part file with it
     room.quit(); // says bye, so the others see "left" instead of waiting for a timeout
     transfer.stop();

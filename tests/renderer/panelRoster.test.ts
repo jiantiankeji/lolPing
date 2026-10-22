@@ -5,7 +5,7 @@ import type { RoomMember, RoomStateCore } from '../../src/shared/room';
 
 const member = (over: Partial<RoomMember> = {}): RoomMember => ({
   peer: 'bb', name: 'Alex', color: 0, rgb: null, path: 'lan', status: 'on', needsUpdate: false, noEmotes: false,
-  noChat: false, textOff: false, votesOff: false, muted: false, self: false, ...over,
+  noChat: false, textOff: false, votesOff: false, filePort: null, muted: false, self: false, ...over,
 });
 
 describe('memberFlags', () => {

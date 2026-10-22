@@ -20,8 +20,7 @@ function sector(r0: number, r1: number, a0: number, a1: number): string {
   return `M${x0},${y0} L${x1},${y1} A${r1},${r1} 0 0 1 ${x2},${y2} L${x3},${y3} A${r0},${r0} 0 0 0 ${x0},${y0}Z`;
 }
 
-/** The most characters the middle can show: any more would run past the ring at that size. */
-const MAX_CENTER_CHARS = 14;
+/** The most characters the middle can show: any more would run past the ring at that size. */const MAX_CENTER_CHARS = 14;
 
 /** A slice's name as the middle shows it, cut so a long one cannot spill out of the circle. */
 export function centerName(label: string, max = MAX_CENTER_CHARS): string {

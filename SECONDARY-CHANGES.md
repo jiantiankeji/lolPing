@@ -62,8 +62,8 @@ git remote -v
 
 - 轮盘上的 **Push** 扇区改为**传文件**：不再发送 Push 信号。
 - 拖到该扇区后，房间面板里选择收件人，再选文件；一次一个，单个上限 200 MB。
-- **只走局域网**（不经公网中继）：分块 720 字节、累积确认、丢块重传；每块按自己的位置写入，乱序到达也收，
-  所以丢一个包只需重传那一块，不会把整个窗口卡住。
+- **只走局域网**（不经公网中继）：文件走一条独立的 TCP 连接（每帧 64 KB），不再经过房间的 UDP 消息，
+  因此没有逐块签名与确认的开销；顺序与重传交给 TCP，接收方按位置写入，最后用 sha256 校验。
 - 接收方会看到卡片（谁、什么文件、多大），**先选保存位置再接受**，也可以拒绝。
 - 两端都有进度条与取消；落地前用 sha256 校验，半截文件不会以真实文件名留在硬盘上。
 
@@ -133,9 +133,9 @@ electron_mirror=https://npmmirror.com/mirrors/electron/
   (card button, another Danger ping, `Ctrl+Alt+P`, `Esc`).
 - **Request gather (Assist Me):** opens a configured workspace of programs, files, folders and URLs, with plans,
   arguments, a working directory, and a "VS Code project" type that runs a command in the integrated terminal.
-- **Send a file (the old Push slice):** files go to one member over the local network only — point to point,
-  720-byte parts, cumulative acknowledgements, retransmission, ordered writes, sha256 before the file is renamed
-  into place. The receiver chooses where it lands and accepts or declines. Up to 200 MB, one at a time.
+- **Send a file (the old Push slice):** files go to one member over a TCP connection on the local network only —
+  64 KB frames sealed with the room's key, no per-frame signature, sha256 before the file is renamed into place. The
+  receiver chooses where it lands and accepts or declines. Up to 200 MB, one at a time.
 - **Wheel centre:** a hover preview (the slice's icon and name, in the language in force) instead of a fixed
   icon and "PING".
 

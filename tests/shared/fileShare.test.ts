@@ -1,28 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  FILE_MAX_BYTES, MAX_FILE_NAME, MAX_PARTS, PART_BYTES, formatSize, partCount, partLength, progressPercent,
-  sanitizeFileName, withinLimit,
+  FILE_MAX_BYTES, MAX_FILE_NAME, formatSize, progressPercent, sanitizeFileName, withinLimit,
 } from '../../src/shared/fileShare';
-
-describe('partCount and partLength', () => {
-  it('cuts a file into full parts and a shorter last one', () => {
-    expect(partCount(0)).toBe(0);
-    expect(partCount(1)).toBe(1);
-    expect(partCount(PART_BYTES)).toBe(1);
-    expect(partCount(PART_BYTES + 1)).toBe(2);
-    expect(partLength(PART_BYTES + 1, 0)).toBe(PART_BYTES);
-    expect(partLength(PART_BYTES + 1, 1)).toBe(1);
-  });
-
-  it('says nothing sensible about a size that cannot be a file', () => {
-    expect(partCount(-5)).toBe(0);
-    expect(partCount(Number.NaN)).toBe(0);
-  });
-
-  it('needs no more parts than the limit allows, at the limit itself', () => {
-    expect(partCount(FILE_MAX_BYTES)).toBe(MAX_PARTS);
-  });
-});
 
 describe('withinLimit', () => {
   it('takes a real file up to the limit and refuses everything else', () => {

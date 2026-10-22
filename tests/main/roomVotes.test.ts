@@ -8,7 +8,7 @@ import type { VoteOutcome, VoteView } from '../../src/shared/voteTally';
 
 const member = (peer: string, over: Partial<RoomMember> = {}): RoomMember => ({
   peer, name: peer.toUpperCase(), color: 2, rgb: null, path: 'lan', status: 'on', needsUpdate: false, noEmotes: false,
-  noChat: false, textOff: false, votesOff: false, muted: false, self: false, ...over,
+  noChat: false, textOff: false, votesOff: false, filePort: null, muted: false, self: false, ...over,
 });
 
 /** A room that only has members, a phase and the vote traffic, which is all the votes unit looks at. */

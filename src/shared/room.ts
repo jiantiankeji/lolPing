@@ -22,6 +22,11 @@ export interface RoomMember {
   textOff: boolean;
   /** They switched room votes off. */
   votesOff: boolean;
+  /**
+   * The port their file listener is on, or null when their app predates sending files or they are only reachable over a
+   * relay. A file goes to their LAN address on this port, over TCP.
+   */
+  filePort: number | null;
   /** Muted by us, for this session. */
   muted: boolean;
   self: boolean;

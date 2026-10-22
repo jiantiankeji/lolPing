@@ -10,7 +10,7 @@ type Shown = Parameters<RoomTextDeps['show']>[0];
 
 const member = (peer: string, name: string, self = false): RoomMember => ({
   peer, name, color: 2, rgb: null, path: 'lan', status: 'on', needsUpdate: false, noEmotes: false, noChat: false,
-  textOff: false, votesOff: false, muted: false, self,
+  textOff: false, votesOff: false, filePort: null, muted: false, self,
 });
 
 /** A room that only has members and events, which is all the text unit looks at. */

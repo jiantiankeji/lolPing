@@ -4,13 +4,11 @@ import {
   isTagColor, isTagRgb, nearestTagColor, readableTagRgb, sameTagRgb, TAG_COLORS, tagColorCss, tagHex, tagRgbFromHex, tagWire,
 } from '../../src/shared/roomColors';
 import {
-  clampNameInput, decodeMessage, decodeSigned, encodeMessage, isFileMessage, isOlderThan, isVoteId, joinSigned,
+  clampNameInput, decodeMessage, decodeSigned, encodeMessage, isOlderThan, isVoteId, joinSigned,
   MAX_TEXT, sanitizeName, sanitizeText, splitSigned, validateMessage,
-  type AcceptMsg, type AckMsg, type AbortMsg, type AliveMsg, type BallotMsg, type ChunkMsg, type EmoteMsg,
-  type FinishMsg, type OfferMsg, type PartMsg, type PingMsg, type PresenceMsg, type RoomMessage, type SealMsg,
+  type AliveMsg, type BallotMsg, type ChunkMsg, type EmoteMsg, type PingMsg, type PresenceMsg, type RoomMessage,
   type TextMsg, type VoteMsg, type WantMsg,
 } from '../../src/shared/roomProtocol';
-import { FILE_MAX_BYTES, MAX_FILE_NAME, MAX_PARTS, PART_B64_MAX, partCount } from '../../src/shared/fileShare';
 
 const base = { peer: '0123456789abcdef', seq: 4, ts: 1_780_000_000_000 };
 const presence: PresenceMsg = { ...base, t: 'presence', proto: 1, app: '0.3.0', name: 'Alex', color: 3, status: 'on', em: [], nf: [] };
@@ -60,65 +58,6 @@ describe('text messages', () => {
     ['x above 1', { ...text, x: 1.1 }],
   ])('rejects %s', (_label, raw) => {
     expect(validateMessage(raw)).toBeNull();
-  });
-});
-
-describe('file transfer messages', () => {
-  const who = 'fedcba9876543210';
-  const offer: OfferMsg = { ...base, t: 'offer', to: who, id: 'abcd1234', name: 'shot.png', size: 1500, n: partCount(1500) };
-
-  it('accepts an offer that matches its own size', () => {
-    expect(validateMessage(offer)).toEqual(offer);
-  });
-
-  it('refuses an offer whose part count does not match its size', () => {
-    expect(validateMessage({ ...offer, n: offer.n + 1 })).toBeNull();
-    expect(validateMessage({ ...offer, n: 0 })).toBeNull();
-  });
-
-  it('refuses a file beyond the limit, an empty one, and a bad name or id', () => {
-    expect(validateMessage({ ...offer, size: FILE_MAX_BYTES + 1, n: partCount(FILE_MAX_BYTES + 1) })).toBeNull();
-    expect(validateMessage({ ...offer, size: 0, n: 0 })).toBeNull();
-    expect(validateMessage({ ...offer, name: '  ' })).toBeNull();
-    expect(validateMessage({ ...offer, name: 'a'.repeat(MAX_FILE_NAME + 1) })).toBeNull();
-    expect(validateMessage({ ...offer, id: 'ABCD1234' })).toBeNull();
-    expect(validateMessage({ ...offer, to: 'not-a-peer' })).toBeNull();
-  });
-
-  it('accepts a part of a real size and refuses a malformed one', () => {
-    const part: PartMsg = { ...base, t: 'part', id: 'abcd1234', i: 0, b: 'AAAA' };
-    expect(validateMessage(part)).toEqual(part);
-    expect(validateMessage({ ...part, b: 'AAA' })).toBeNull(); // not base64 of four
-    expect(validateMessage({ ...part, b: 'A'.repeat(PART_B64_MAX + 4) })).toBeNull();
-    expect(validateMessage({ ...part, i: MAX_PARTS })).toBeNull();
-  });
-
-  it('accepts every other message of a transfer', () => {
-    const accept: AcceptMsg = { ...base, t: 'accept', to: who, id: 'abcd1234', took: true };
-    const ack: AckMsg = { ...base, t: 'ack', to: who, id: 'abcd1234', next: 2 };
-    const sealMsg: SealMsg = { ...base, t: 'seal', id: 'abcd1234', sha: 'a'.repeat(64) };
-    const finish: FinishMsg = { ...base, t: 'finish', to: who, id: 'abcd1234', ok: false };
-    const abort: AbortMsg = { ...base, t: 'abort', id: 'abcd1234' };
-    for (const m of [accept, ack, sealMsg, finish, abort]) expect(validateMessage(m)).toEqual(m);
-    expect(validateMessage({ ...ack, next: -1 })).toBeNull();
-    expect(validateMessage({ ...sealMsg, sha: 'a'.repeat(63) })).toBeNull();
-    expect(validateMessage({ ...accept, took: 'yes' })).toBeNull();
-  });
-
-  it('knows which messages belong to a transfer', () => {
-    for (const m of [offer, { ...base, t: 'accept', to: who, id: 'abcd1234', took: true }] as const) {
-      expect(isFileMessage(m as RoomMessage)).toBe(true);
-    }
-    expect(isFileMessage(ping)).toBe(false);
-    expect(isFileMessage(text)).toBe(false);
-  });
-
-  it('fits the largest part in one sealed packet', () => {
-    const part: PartMsg = { ...base, t: 'part', id: 'abcd1234', i: 123_456, b: 'A'.repeat(PART_B64_MAX) };
-    // The worst case: the body, plus the 88-character signature a sealed message carries.
-    const plain = `${JSON.stringify(part).slice(0, -1)},"sg":"${'A'.repeat(88)}"}`;
-    const sealed = seal(Buffer.alloc(32), Buffer.from(plain, 'utf8'));
-    expect(sealed.length).toBeLessThanOrEqual(MAX_PACKET);
   });
 });
 

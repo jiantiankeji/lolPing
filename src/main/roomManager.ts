@@ -6,10 +6,11 @@ import type { JoinResult, MemberPath, RoomMember, RoomStateCore } from '../share
 import type { TagRgb } from '../shared/roomColors';
 import { formatRoomCode, makeRoomCode, parseRoomCode } from '../shared/roomCode';
 import {
-  decodeSigned, encodeMessage, isFileMessage, isOlderThan, joinSigned, PROTOCOL_VERSION, ROOM_CHAT_SINCE,
-  type BallotMsg, type FileMsg, type MemberStatus, type PresenceMsg, type RoomFeatureOff, type RoomMessage,
+  decodeSigned, encodeMessage, isOlderThan, joinSigned, PROTOCOL_VERSION, ROOM_CHAT_SINCE,
+  type BallotMsg, type MemberStatus, type PresenceMsg, type RoomFeatureOff, type RoomMessage,
   type VoteKind, type VoteMsg,
 } from '../shared/roomProtocol';
+import { hostFromPeerKey } from './fileTcp';
 import { RateLimiter } from './rateLimiter';
 import { ReplayGuard } from './replayGuard';
 import {
@@ -35,16 +36,6 @@ export const RELAY_PING_BURST = 10;
 const BALLOT_RATE = 0.5;
 /** want/chunk messages accepted per member: a still's chunks arrive as a burst, so this bucket is wider than the ping one. */
 const TRANSFER_RATE = 60;
-/** File parts accepted per member: a part is one packet, and a 163 MB file is a quarter of a million of them. */
-const FILE_PART_RATE = 12000;
-/** Parts allowed to arrive at once, over the rate: a window of 32 lands together after every acknowledgement. */
-const FILE_PART_BURST = 2000;
-/**
- * The rest of a file transfer's messages. An acknowledgement goes out every 16 parts, so at the part rate above this
- * has to be able to carry a twelfth of it; too small a bucket drops the acknowledgements the sender's window waits for.
- */
-const FILE_CONTROL_RATE = 1200;
-const FILE_CONTROL_BURST = 200;
 /** Presence asked for on a shared transport (a change, a new link, a new member): at most this often. */
 const SHARED_PRESENCE_MS = 1000;
 /** The first app version that shows emotes. */
@@ -102,14 +93,6 @@ export type RoomToast =
   | { kind: 'joinedRoom'; code: string }
   | { kind: 'full' };
 
-/** One file-transfer message from a member, already past the room's gates and its own budget. */
-export interface RoomFile {
-  /** The member it came from. */
-  peer: string;
-  /** That member's name, for the card that asks whether to take it. */
-  name: string;
-  msg: FileMsg;
-}
 
 export interface RoomDeps {
   transports: Transport[];
@@ -139,6 +122,8 @@ interface Member {
   noChat: boolean;
   textOff: boolean;
   votesOff: boolean;
+  /** The port their file listener is on; null when their app predates sending files. */
+  filePort: number | null;
   muted: boolean;
   /** The custom emote hashes their last presence announced. */
   em: string[];
@@ -184,10 +169,8 @@ export class RoomManager extends EventEmitter {
   private readonly transferLimiter: RateLimiter;
   /** Ballots per member, apart from `limiter`: a vote needs every answer, but not a flood of them. */
   private readonly ballotLimiter: RateLimiter;
-  /** File transfers per member, apart from `limiter`: a whole file arrives as a quarter of a million parts. */
-  private readonly fileParts: RateLimiter;
-  /** The rest of a file transfer. Its own bucket: parts would spend an acknowledgement's budget in a millisecond. */
-  private readonly fileControl: RateLimiter;
+  /** The port our file listener is on, announced in every presence; null until it is listening. */
+  private filePort: number | null = null;
   private paused = false;
   private roomMuted = false;
   private aloneSince: number | null = null;
@@ -217,8 +200,6 @@ export class RoomManager extends EventEmitter {
     this.limiter = new RateLimiter(deps.now);
     this.transferLimiter = new RateLimiter(deps.now);
     this.ballotLimiter = new RateLimiter(deps.now);
-    this.fileParts = new RateLimiter(deps.now);
-    this.fileControl = new RateLimiter(deps.now);
     this.relayCap = new RateLimiter(deps.now);
     for (const t of deps.transports) {
       t.on('packet', (peer: PeerKey, packet: Uint8Array) => this.onPacket(t, peer, packet));
@@ -358,6 +339,31 @@ export class RoomManager extends EventEmitter {
     this.emitState();
   }
 
+  /** Tells the room which port our file listener took, so a member can send us a file over TCP. */
+  setFilePort(port: number): void {
+    this.filePort = port;
+    this.announce();
+  }
+
+  /** The room's message key: a file's TCP frames are sealed with it, so only this room can read the stream. */
+  messageKey(): Buffer | null {
+    return this.keys?.msgKey ?? null;
+  }
+
+  /**
+   * Where a file for `peer` should go: their LAN address and the port their listener announced, or null when they are
+   * only reachable over a relay, their app predates files, or we cannot see a LAN path to them.
+   */
+  fileTarget(peer: string): { host: string; port: number } | null {
+    const m = this.members.get(peer);
+    if (!m || m.filePort === null) return null;
+    const lan = m.paths.lan;
+    if (!lan || this.deps.now() - lan.seenAt >= ALIVE_MS.lan) return null;
+    const host = hostFromPeerKey(lan.key);
+    if (host === null) return null;
+    return { host, port: m.filePort };
+  }
+
   /**
    * "Allow internet connections". Turning it off mid-room sends no bye: a bye makes the others ignore our peer ID for
    * their whole session, LAN included. Members only reachable over the internet time out instead.
@@ -404,12 +410,12 @@ export class RoomManager extends EventEmitter {
       {
         peer: this.self, name: p.name, color: p.color, rgb: p.rgb, path: 'lan', status: this.status(),
         needsUpdate: false, noEmotes: false, noChat: false, textOff: p.nf.includes('text'), votesOff: p.nf.includes('votes'),
-        muted: false, self: true,
+        filePort: this.filePort, muted: false, self: true,
       },
       ...[...this.members.values()].map((m) => ({
         peer: m.peer, name: m.name, color: m.color, rgb: m.rgb, path: this.path(m, now), status: m.status,
         needsUpdate: m.needsUpdate, noEmotes: m.noEmotes, noChat: m.noChat, textOff: m.textOff, votesOff: m.votesOff,
-        muted: m.muted, self: false,
+        filePort: m.filePort, muted: m.muted, self: false,
       })),
     ];
     return {
@@ -575,17 +581,6 @@ export class RoomManager extends EventEmitter {
     }
     // Pings, emotes, text, alive lines and votes pass the same gates and share one budget per member.
     if (this.paused || this.roomMuted || m.muted || m.needsUpdate) return;
-    // A file transfer has a budget of its own: parts arrive far faster than anything else a member sends, and none of
-    // them carries a point on screen. It never goes to the shared transports: a whole file is not a room message.
-    if (isFileMessage(msg)) {
-      // Two buckets, because a part and an acknowledgement travel at wildly different rates: sharing one would let a
-      // burst of parts starve the acknowledgements the sender is waiting for.
-      const allowed = msg.t === 'part'
-        ? this.fileParts.allow(m.peer, FILE_PART_RATE, FILE_PART_BURST)
-        : this.fileControl.allow(m.peer, FILE_CONTROL_RATE, FILE_CONTROL_BURST);
-      if (allowed) this.emit('file', { peer: m.peer, name: m.name, msg } satisfies RoomFile);
-      return;
-    }
     if (!this.limiter.allow(m.peer, this.deps.profile().limit)) return;
     if (msg.t === 'vote') {
       this.emit('vote', msg satisfies VoteMsg);
@@ -625,7 +620,7 @@ export class RoomManager extends EventEmitter {
       if (!t.shared && this.membersAt(t.kind, key) >= 2) return;
       m = {
         peer: msg.peer, name: msg.name, color: msg.color, rgb: msg.rgb ?? null, status: msg.status,
-        needsUpdate: false, noEmotes: false, noChat: false, textOff: false, votesOff: false, muted: false, em: [],
+        needsUpdate: false, noEmotes: false, noChat: false, textOff: false, votesOff: false, filePort: msg.tp ?? null, muted: false, em: [],
         firstSeen: this.deps.now(), viaInternet: false, paths: {}, pk: null,
       };
       this.members.set(m.peer, m);
@@ -644,6 +639,7 @@ export class RoomManager extends EventEmitter {
     m.noChat = isOlderThan(msg.app, ROOM_CHAT_SINCE);
     m.textOff = msg.nf.includes('text');
     m.votesOff = msg.nf.includes('votes');
+    m.filePort = msg.tp ?? null;
     m.em = msg.em;
     // Every presence, so a hash whose assembly gave up is asked for again: EmoteTransfer skips what is already here.
     // A paused lolPing neither fetches nor serves stills; the next presence after unpausing starts prefetch again.
@@ -685,8 +681,6 @@ export class RoomManager extends EventEmitter {
     this.limiter.forget(m.peer);
     this.ballotLimiter.forget(m.peer);
     this.transferLimiter.forget(m.peer);
-    this.fileParts.forget(m.peer);
-    this.fileControl.forget(m.peer);
     for (const p of Object.values(m.paths)) this.answered.delete(p.key);
     if (this.members.size === 0 && this.phase !== 'idle') this.aloneSince = this.deps.now();
     this.emit('memberGone', m.peer);
@@ -725,6 +719,8 @@ export class RoomManager extends EventEmitter {
     return this.seal({
       t: 'presence', proto: PROTOCOL_VERSION, app: this.deps.appVersion, name: p.name, color: p.color, status: this.status(),
       em: [...this.deps.announceEmotes()], pk: this.identity.pk.toString('base64'),
+      // The port a file would go to. Left out while nothing is listening, and ignored by apps that predate files.
+      ...(this.filePort === null ? {} : { tp: this.filePort }),
       // Left out when nothing is off, so a presence to an older peer carries nothing new.
       ...(p.nf.length ? { nf: [...p.nf] } : {}),
       // Left out rather than sent as null: a peer on an older build ignores it either way, and this keeps the packet small.

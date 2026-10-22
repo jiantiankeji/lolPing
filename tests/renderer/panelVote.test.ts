@@ -6,7 +6,7 @@ import { VOTE_MS, type VoteView } from '../../src/shared/voteTally';
 
 const member = (peer: string, name: string, self = false): RoomMember => ({
   peer, name, color: 0, rgb: null, path: 'lan', status: 'on', needsUpdate: false, noEmotes: false, noChat: false,
-  textOff: false, votesOff: false, muted: false, self,
+  textOff: false, votesOff: false, filePort: null, muted: false, self,
 });
 const members = [member('aa', 'Me', true), member('bb', 'Alex'), member('cc', 'Sam')];
 const view = (over: Partial<VoteView> = {}): VoteView => ({

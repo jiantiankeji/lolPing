@@ -1,68 +1,101 @@
-import { createHash } from 'node:crypto';
-import { createReadStream } from 'node:fs';
-import { open, rename, rm, stat, type FileHandle } from 'node:fs/promises';
+import { stat } from 'node:fs/promises';
 import type { Lang, Strings } from '../shared/i18n';
 import {
   FILE_MAX_BYTES, formatSize, sanitizeFileName, withinLimit, type TransferResult, type TransferState,
 } from '../shared/fileShare';
-import type { FileMsg } from '../shared/roomProtocol';
-import { FileReceiver, FileSender, type TransferEnd } from './fileTransfers';
+import { FileListener, sendFileTo } from './fileTcp';
 
+/** What the card needs is in `TransferState`; this is what the app hands the transfer when it starts. */
 export interface FileSharesDeps {
   lang(): Lang;
   text(): Strings;
-  /** One transfer message, to one member, over the local network. */
-  send(peer: string, body: Record<string, unknown>): void;
+  /** Where a file for this member goes: their LAN address and the port their listener announced. */
+  target(peer: string): { host: string; port: number } | null;
+  /** The room's message key: the TCP frames are sealed with it, so only this room can read the stream. */
+  key(): Buffer | null;
   /** Draws the card; null takes it away. */
   show(state: TransferState | null): void;
   toast(title: string, body: string): void;
-  /** Whoever is in the room: one of them gets the file. */
   members(): Array<{ peer: string; name: string }>;
   /** Asks which member should get it, when there is a choice; null cancels. */
   pickMember(): Promise<string | null>;
   /** Asks which file to send; null cancels. */
   pickFile(): Promise<{ path: string; name: string } | null>;
-  /** Asks where to put what arrives; null cancels. */
+  /** Asks where to put what arrives; null refuses it. */
   pickSave(name: string): Promise<string | null>;
-  now(): number;
-  newId(): string;
 }
 
 /** How long a finished card stays before it takes itself away. */
 const CARD_MS = 4000;
 
-const sha256Of = (path: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    const hash = createHash('sha256');
-    createReadStream(path)
-      .on('data', (chunk) => hash.update(chunk))
-      .on('error', reject)
-      .on('end', () => resolve(hash.digest('hex')));
-  });
-
 /**
- * One file at a time, either going out or coming in. It owns the dialogs and the file handles; the wire protocol and
- * the pacing live in `fileTransfers.ts`, which knows nothing about Electron or the disk.
+ * One file at a time, either going out or coming in, over a TCP connection between two members of the room. The socket
+ * work lives in `fileTcp.ts`; this decides what to send, what to show, and when the card goes away.
  */
 export class FileShares {
-  private outgoing: { sender: FileSender; handle: FileHandle; peerName: string; result: TransferResult | null } | null = null;
-  private incoming: {
-    receiver: FileReceiver;
-    handle: FileHandle | null;
-    temp: string;
-    target: string;
+  private listener: FileListener | null = null;
+  private out: {
     peerName: string;
+    name: string;
+    size: number;
+    sent: number;
+    abort: AbortController;
+    result: TransferResult | null;
+  } | null = null;
+  private incoming: {
+    name: string;
+    size: number;
+    got: number;
+    asking: boolean;
     result: TransferResult | null;
   } | null = null;
   private hideTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly deps: FileSharesDeps) {}
 
-  /** The ping landed: choose who gets it and what to send, then offer it. */
+  /** Starts the listener on the room's key and returns the port to announce in our presence. */
+  async listen(key: Buffer): Promise<number> {
+    this.stop();
+    this.listener = new FileListener({
+      key,
+      pickSave: async (name, size) => {
+        const safe = sanitizeFileName(name);
+        this.incoming = { name: safe, size, got: 0, asking: true, result: null };
+        this.publish();
+        const target = await this.deps.pickSave(safe);
+        if (this.incoming) this.incoming.asking = false;
+        return target;
+      },
+      onProgress: (p) => {
+        if (!this.incoming) return;
+        this.incoming.got = p.bytes;
+        this.publish();
+      },
+      onEnd: (result) => this.endIncoming(result.ok ? 'ok' : result.why),
+    });
+    return this.listener.listen(0);
+  }
+
+  stop(): void {
+    if (this.hideTimer) clearTimeout(this.hideTimer);
+    this.hideTimer = null;
+    this.listener?.close();
+    this.listener = null;
+    this.out?.abort.abort();
+    this.out = null;
+    this.incoming = null;
+  }
+
+  /** The ping landed: choose who gets it and what to send, then hand it to the socket. */
   async start(): Promise<void> {
     const t = this.deps.text();
     if (this.busy()) {
       this.deps.toast(t.fileBusy, '');
+      return;
+    }
+    const key = this.deps.key();
+    if (key === null) {
+      this.deps.toast(t.fileNobody, t.fileNobodyBody);
       return;
     }
     const members = this.deps.members();
@@ -72,6 +105,12 @@ export class FileShares {
     }
     const peer = members.length === 1 ? members[0].peer : await this.deps.pickMember();
     if (peer === null) return;
+    const target = this.deps.target(peer);
+    if (!target) {
+      // Over a relay, or an app that predates files: there is no socket to open.
+      this.deps.toast(t.fileNoLan, t.fileNoLanBody);
+      return;
+    }
     const who = members.find((m) => m.peer === peer);
     const picked = await this.deps.pickFile();
     if (picked === null) return;
@@ -84,234 +123,98 @@ export class FileShares {
       this.deps.toast(t.fileTooBig, t.fileTooBigBody(formatSize(FILE_MAX_BYTES)));
       return;
     }
-    const handle = await open(picked.path, 'r').catch(() => null);
-    if (!handle) {
-      this.deps.toast(t.fileGone, picked.name);
-      return;
-    }
     const name = sanitizeFileName(picked.name);
-    const sender = new FileSender({
-      read: async (offset, length) => {
-        const buffer = Buffer.alloc(length);
-        const { bytesRead } = await handle.read(buffer, 0, length, offset);
-        return bytesRead === 0 ? null : new Uint8Array(buffer.subarray(0, bytesRead));
-      },
-      sha256: () => sha256Of(picked.path),
-      send: (to, body) => this.deps.send(to, body),
-      progress: () => this.publish(),
-      end: (result) => void this.endOut(result),
-      now: () => this.deps.now(),
-    }, peer, this.deps.newId(), name, info.size);
-    this.outgoing = { sender, handle, peerName: who?.name ?? '', result: null };
-    sender.offer();
+    const abort = new AbortController();
+    this.out = { peerName: who?.name ?? '', name, size: info.size, sent: 0, abort, result: null };
     this.publish();
+    const result = await sendFileTo(
+      { host: target.host, port: target.port, key, path: picked.path, name, signal: abort.signal },
+      (p) => {
+        if (!this.out) return;
+        this.out.sent = p.bytes;
+        this.publish();
+      },
+    );
+    const why = result.ok ? 'ok' : result.why ?? 'failed';
+    this.endOutgoing(why);
   }
 
-  /** Every message a member sends about a file lands here. */
-  onMessage(peer: string, peerName: string, msg: FileMsg): void {
-    if (msg.t === 'offer') return void this.takeOffer(peer, peerName, msg);
-    const out = this.outgoing;
-    if (out && peer === out.sender.peer) {
-      out.sender.onMessage(msg);
+  /** A click on the card: call the transfer off. */
+  cancel(): void {
+    if (this.out && this.out.result === null) {
+      this.out.abort.abort();
       return;
     }
-    const incoming = this.incoming;
-    if (incoming && peer === incoming.receiver.peer) incoming.receiver.onMessage(msg);
-  }
-
-  /** A click on the card: take what is offered, or call the whole thing off. */
-  onAction(action: { t: 'takeFile'; took: boolean } | { t: 'cancelFile' }): void {
-    if (action.t === 'cancelFile') {
-      this.outgoing?.sender.cancel();
-      this.incoming?.receiver.cancel();
-      return;
-    }
-    const incoming = this.incoming;
-    if (!incoming || incoming.result !== null) return;
-    if (!action.took) {
-      incoming.receiver.answer(false);
-      return;
-    }
-    void this.acceptIncoming(incoming);
-  }
-
-  /** Time moves: the senders repeat what went missing and give up on members that have gone. */
-  tick(): void {
-    const now = this.deps.now();
-    this.outgoing?.sender.tick(now);
-    this.incoming?.receiver.tick(now);
+    this.listener?.cancel();
   }
 
   dispose(): void {
-    if (this.hideTimer) clearTimeout(this.hideTimer);
-    this.hideTimer = null;
-    void this.dropOut();
-    void this.dropIncoming();
+    this.stop();
+    this.deps.show(null);
   }
 
   private busy(): boolean {
-    if (this.outgoing && this.outgoing.result === null) return true;
+    if (this.out && this.out.result === null) return true;
     return this.incoming !== null && this.incoming.result === null;
   }
 
-  private async takeOffer(peer: string, peerName: string, msg: Extract<FileMsg, { t: 'offer' }>): Promise<void> {
-    const t = this.deps.text();
-    if (this.busy()) {
-      // Two at once would be two cards and two files: the second simply does not start.
-      this.deps.send(peer, { t: 'abort', id: msg.id });
-      return;
-    }
-    const name = sanitizeFileName(msg.name);
-    if (!withinLimit(msg.size)) {
-      this.deps.send(peer, { t: 'abort', id: msg.id });
-      return;
-    }
-    this.incoming = {
-      receiver: new FileReceiver({
-        write: async (bytes, offset) => {
-          const handle = this.incoming?.handle;
-          if (!handle) return false;
-          return handle.write(bytes, 0, bytes.length, offset).then(() => true).catch(() => false);
-        },
-        sha256: async () => {
-          const current = this.incoming;
-          if (!current) return '';
-          await current.handle?.sync().catch(() => undefined);
-          return current.temp === '' ? '' : sha256Of(current.temp);
-        },
-        commit: async () => {
-          const current = this.incoming;
-          if (!current) return false;
-          await current.handle?.close().catch(() => undefined);
-          return rename(current.temp, current.target).then(() => true).catch(() => false);
-        },
-        discard: () => {
-          const current = this.incoming;
-          if (!current) return;
-          void current.handle?.close().catch(() => undefined).then(() => rm(current.temp, { force: true }));
-        },
-        send: (to, body) => this.deps.send(to, body),
-        progress: () => this.publish(),
-        end: (result) => void this.endIncoming(result),
-        now: () => this.deps.now(),
-      }, peer, msg.id, name, msg.size),
-      // The handle waits for the answer: the user picks where it goes before a byte is written.
-      handle: null,
-      temp: '',
-      target: '',
-      peerName,
-      result: null,
-    };
-    this.publish(t.fileAskTitle(peerName));
-  }
-
-  private async acceptIncoming(incoming: NonNullable<FileShares['incoming']>): Promise<void> {
-    const t = this.deps.text();
-    const target = await this.deps.pickSave(incoming.receiver.name);
-    if (target === null) {
-      incoming.receiver.answer(false);
-      return;
-    }
-    const temp = `${target}.lolping-part`;
-    const handle = await open(temp, 'w').catch(() => null);
-    if (!handle) {
-      this.deps.toast(t.fileSaveFailed, incoming.receiver.name);
-      incoming.receiver.answer(false);
-      return;
-    }
-    incoming.handle = handle;
-    incoming.temp = temp;
-    incoming.target = target;
-    incoming.receiver.answer(true);
-    this.publish();
-  }
-
-  private async endOut(result: TransferEnd): Promise<void> {
-    const out = this.outgoing;
-    if (!out) return;
-    out.result = result.ok ? 'ok' : result.why;
-    await out.handle.close().catch(() => undefined);
+  private endOutgoing(why: TransferResult): void {
+    if (!this.out) return;
+    this.out.result = why;
     this.publish();
     this.scheduleHide();
   }
 
-  private async endIncoming(result: TransferEnd): Promise<void> {
-    const incoming = this.incoming;
-    if (!incoming) return;
-    incoming.result = result.ok ? 'ok' : result.why;
-    if (!result.ok) {
-      await incoming.handle?.close().catch(() => undefined);
-      if (incoming.temp !== '') await rm(incoming.temp, { force: true }).catch(() => undefined);
-    }
+  private endIncoming(why: TransferResult): void {
+    if (!this.incoming) return;
+    this.incoming.result = why;
     this.publish();
     this.scheduleHide();
   }
 
-  private async dropOut(): Promise<void> {
-    const out = this.outgoing;
-    this.outgoing = null;
-    if (out) await out.handle.close().catch(() => undefined);
-  }
-
-  private async dropIncoming(): Promise<void> {
-    const incoming = this.incoming;
-    this.incoming = null;
-    if (!incoming) return;
-    await incoming.handle?.close().catch(() => undefined);
-    if (incoming.temp !== '') await rm(incoming.temp, { force: true }).catch(() => undefined);
-  }
-
-  /** Puts the current state on the card: the offer waiting for an answer, or how far a transfer has got. */
-  private publish(askTitle?: string): void {
-    const incoming = this.incoming;
-    const out = this.outgoing;
-    const peerName = incoming?.peerName ?? out?.peerName ?? '';
-    if (incoming) {
-      const receiver = incoming.receiver;
-      const finished = incoming.result !== null;
-      this.deps.show({
-        view: 'transfer',
-        lang: this.deps.lang(),
-        phase: finished ? (incoming.result === 'ok' ? 'done' : 'failed') : incoming.handle ? 'receiving' : 'ask',
-        peerName,
-        fileName: receiver.name,
-        size: receiver.size,
-        done: receiver.done,
-        total: receiver.total,
-        ...(incoming.result === null ? {} : { result: incoming.result }),
-      });
-      if (incoming.handle === null && askTitle !== undefined) this.announce(askTitle, receiver.name, receiver.size);
-      return;
-    }
+  private publish(): void {
+    const lang = this.deps.lang();
+    const out = this.out;
     if (out) {
-      const sender = out.sender;
       const finished = out.result !== null;
       this.deps.show({
         view: 'transfer',
-        lang: this.deps.lang(),
+        lang,
         phase: finished ? (out.result === 'ok' ? 'done' : 'failed') : 'sending',
-        peerName,
-        fileName: sender.name,
-        size: sender.size,
-        done: sender.done,
-        total: sender.total,
-        ...(out.result === null ? {} : { result: out.result }),
+        peerName: out.peerName,
+        fileName: out.name,
+        size: out.size,
+        done: out.sent,
+        total: out.size,
+        ...(finished ? { result: out.result as TransferResult } : {}),
+      });
+      return;
+    }
+    const incoming = this.incoming;
+    if (incoming) {
+      const finished = incoming.result !== null;
+      this.deps.show({
+        view: 'transfer',
+        lang,
+        phase: finished ? (incoming.result === 'ok' ? 'done' : 'failed') : incoming.asking ? 'ask' : 'receiving',
+        peerName: '',
+        fileName: incoming.name,
+        size: incoming.size,
+        done: incoming.got,
+        total: incoming.size,
+        ...(finished ? { result: incoming.result as TransferResult } : {}),
       });
       return;
     }
     this.deps.show(null);
   }
 
-  private announce(title: string, name: string, size: number): void {
-    this.deps.toast(title, `${name} · ${formatSize(size)}`);
-  }
-
   private scheduleHide(): void {
     if (this.hideTimer) clearTimeout(this.hideTimer);
     this.hideTimer = setTimeout(() => {
       this.hideTimer = null;
-      void this.dropOut();
-      void this.dropIncoming();
+      this.out = null;
+      this.incoming = null;
       this.deps.show(null);
     }, CARD_MS);
   }

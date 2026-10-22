@@ -6,31 +6,8 @@ import type { PingId } from './pings';
 
 /** The largest file the room will carry. */
 export const FILE_MAX_BYTES = 200 * 1024 * 1024;
-/**
- * Raw bytes in one part. base64 of this is 960 characters, and a part's message plus its signature and the packet's
- * 29 bytes of encryption overhead stays under MAX_PACKET (1200): 202 bytes of fields + 960 + 29 = 1191.
- */
-export const PART_BYTES = 720;
-/** Base64 characters a part may carry, checked on the wire. */
-export const PART_B64_MAX = 960;
-/** The most parts a file at the limit can need. */
-export const MAX_PARTS = Math.ceil(FILE_MAX_BYTES / PART_BYTES);
 /** A file name as shown and saved: enough to recognise, short enough for one message. */
 export const MAX_FILE_NAME = 120;
-
-export const TRANSFER_ID_RE = /^[0-9a-f]{8}$/;
-
-/** How many parts a file of `size` bytes needs; an empty file still needs none. */
-export function partCount(size: number): number {
-  if (!Number.isFinite(size) || size <= 0) return 0;
-  return Math.ceil(size / PART_BYTES);
-}
-
-/** How many bytes the part at `index` carries: every part is full but the last. */
-export function partLength(size: number, index: number): number {
-  const left = size - index * PART_BYTES;
-  return Math.max(0, Math.min(PART_BYTES, left));
-}
 
 /** Whether this file may go at all: non-empty, and inside the limit. */
 export function withinLimit(size: number): boolean {
@@ -94,9 +71,3 @@ export interface TransferState {
   result?: TransferResult;
 }
 
-/** How many parts may be in flight before the sender waits for an acknowledgement. */
-export const WINDOW_PARTS = 32;
-/** A sender that hears nothing for this long gives up: the receiver is gone, or the room is too lossy. */
-export const TRANSFER_IDLE_MS = 8000;
-/** How long an offer waits for an answer before it is dropped. */
-export const OFFER_MS = 30000;
