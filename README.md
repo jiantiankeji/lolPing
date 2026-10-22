@@ -11,6 +11,12 @@
 </p>
 
 <p align="center">
+  <b>This repository is a modified fork of <a href="https://github.com/darrenprx/lolPing">darrenprx/lolPing</a>.</b><br>
+  AI analysis, a shutdown countdown, a request-gather workspace and local file transfer were added on top of it —
+  see <a href="SECONDARY-CHANGES.md">SECONDARY-CHANGES.md</a> for exactly what changed and what is still unproven.
+</p>
+
+<p align="center">
   <a href="https://github.com/darrenprx/lolPing/releases/latest"><b>Download for Windows</b></a> ·
   <a href="https://github.com/darrenprx/lolPing/releases/latest"><b>Download for Mac</b></a> (Apple Silicon, experimental)
 </p>

@@ -11,6 +11,12 @@
 </p>
 
 <p align="center">
+  <b>本仓库是 <a href="https://github.com/darrenprx/lolPing">darrenprx/lolPing</a> 的二次开发版本。</b><br>
+  在其基础上增加了 AI 分析、关机倒计时、请求集合与局域网传文件——
+  具体改了什么、哪些还没验证，见 <a href="SECONDARY-CHANGES.md">二次修改说明</a>。
+</p>
+
+<p align="center">
   <a href="https://github.com/darrenprx/lolPing/releases/latest"><b>下载 Windows 版</b></a> ·
   <a href="https://github.com/darrenprx/lolPing/releases/latest"><b>下载 Mac 版</b></a>（Apple 芯片，实验性）
 </p>
