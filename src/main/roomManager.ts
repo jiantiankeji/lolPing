@@ -35,10 +35,16 @@ export const RELAY_PING_BURST = 10;
 const BALLOT_RATE = 0.5;
 /** want/chunk messages accepted per member: a still's chunks arrive as a burst, so this bucket is wider than the ping one. */
 const TRANSFER_RATE = 60;
-/** File parts accepted per member: a 200 MB transfer is a quarter of a million of these, so the bucket is wide. */
-const FILE_PART_RATE = 2000;
-/** The rest of a file transfer's messages: an offer, an answer, an acknowledgement now and then. */
-const FILE_CONTROL_RATE = 20;
+/** File parts accepted per member: a part is one packet, and a 163 MB file is a quarter of a million of them. */
+const FILE_PART_RATE = 12000;
+/** Parts allowed to arrive at once, over the rate: a window of 32 lands together after every acknowledgement. */
+const FILE_PART_BURST = 2000;
+/**
+ * The rest of a file transfer's messages. An acknowledgement goes out every 16 parts, so at the part rate above this
+ * has to be able to carry a twelfth of it; too small a bucket drops the acknowledgements the sender's window waits for.
+ */
+const FILE_CONTROL_RATE = 1200;
+const FILE_CONTROL_BURST = 200;
 /** Presence asked for on a shared transport (a change, a new link, a new member): at most this often. */
 const SHARED_PRESENCE_MS = 1000;
 /** The first app version that shows emotes. */
@@ -179,7 +185,9 @@ export class RoomManager extends EventEmitter {
   /** Ballots per member, apart from `limiter`: a vote needs every answer, but not a flood of them. */
   private readonly ballotLimiter: RateLimiter;
   /** File transfers per member, apart from `limiter`: a whole file arrives as a quarter of a million parts. */
-  private readonly fileLimiter: RateLimiter;
+  private readonly fileParts: RateLimiter;
+  /** The rest of a file transfer. Its own bucket: parts would spend an acknowledgement's budget in a millisecond. */
+  private readonly fileControl: RateLimiter;
   private paused = false;
   private roomMuted = false;
   private aloneSince: number | null = null;
@@ -209,7 +217,8 @@ export class RoomManager extends EventEmitter {
     this.limiter = new RateLimiter(deps.now);
     this.transferLimiter = new RateLimiter(deps.now);
     this.ballotLimiter = new RateLimiter(deps.now);
-    this.fileLimiter = new RateLimiter(deps.now);
+    this.fileParts = new RateLimiter(deps.now);
+    this.fileControl = new RateLimiter(deps.now);
     this.relayCap = new RateLimiter(deps.now);
     for (const t of deps.transports) {
       t.on('packet', (peer: PeerKey, packet: Uint8Array) => this.onPacket(t, peer, packet));
@@ -569,8 +578,12 @@ export class RoomManager extends EventEmitter {
     // A file transfer has a budget of its own: parts arrive far faster than anything else a member sends, and none of
     // them carries a point on screen. It never goes to the shared transports: a whole file is not a room message.
     if (isFileMessage(msg)) {
-      const rate = msg.t === 'part' ? FILE_PART_RATE : FILE_CONTROL_RATE;
-      if (this.fileLimiter.allow(m.peer, rate)) this.emit('file', { peer: m.peer, name: m.name, msg } satisfies RoomFile);
+      // Two buckets, because a part and an acknowledgement travel at wildly different rates: sharing one would let a
+      // burst of parts starve the acknowledgements the sender is waiting for.
+      const allowed = msg.t === 'part'
+        ? this.fileParts.allow(m.peer, FILE_PART_RATE, FILE_PART_BURST)
+        : this.fileControl.allow(m.peer, FILE_CONTROL_RATE, FILE_CONTROL_BURST);
+      if (allowed) this.emit('file', { peer: m.peer, name: m.name, msg } satisfies RoomFile);
       return;
     }
     if (!this.limiter.allow(m.peer, this.deps.profile().limit)) return;
@@ -672,6 +685,8 @@ export class RoomManager extends EventEmitter {
     this.limiter.forget(m.peer);
     this.ballotLimiter.forget(m.peer);
     this.transferLimiter.forget(m.peer);
+    this.fileParts.forget(m.peer);
+    this.fileControl.forget(m.peer);
     for (const p of Object.values(m.paths)) this.answered.delete(p.key);
     if (this.members.size === 0 && this.phase !== 'idle') this.aloneSince = this.deps.now();
     this.emit('memberGone', m.peer);

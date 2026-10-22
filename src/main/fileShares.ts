@@ -168,10 +168,10 @@ export class FileShares {
     }
     this.incoming = {
       receiver: new FileReceiver({
-        write: async (bytes) => {
+        write: async (bytes, offset) => {
           const handle = this.incoming?.handle;
           if (!handle) return false;
-          return handle.write(bytes).then(() => true).catch(() => false);
+          return handle.write(bytes, 0, bytes.length, offset).then(() => true).catch(() => false);
         },
         sha256: async () => {
           const current = this.incoming;

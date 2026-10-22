@@ -36,7 +36,8 @@ function pair(size: number, autoAccept = true): Net {
   for (let i = 0; i < size; i++) source[i] = (i * 7 + 3) % 251;
   const toReceiver: FileMsg[] = [];
   const toSender: FileMsg[] = [];
-  const written: Buffer[] = [];
+  // The whole file, written at each part's own offset: a late part lands where it belongs rather than at the end.
+  const written = Buffer.alloc(size);
   const progress: TransferProgress[] = [];
   const clock = { now: 1000 };
   const ends: { sender: TransferEnd | null; receiver: TransferEnd | null } = { sender: null, receiver: null };
@@ -53,8 +54,9 @@ function pair(size: number, autoAccept = true): Net {
     now: () => clock.now,
   };
   const receiverDeps: ReceiverDeps = {
-    write: async (bytes) => {
-      written.push(Buffer.from(bytes));
+    write: async (bytes, offset) => {
+      // Written where it belongs, so the test sees the file reassembled in the right order even if parts arrive late.
+      Buffer.from(bytes).copy(written, offset);
       return true;
     },
     sha256: async () => 'a'.repeat(64),
@@ -65,16 +67,18 @@ function pair(size: number, autoAccept = true): Net {
     end: (r) => { ends.receiver = r; },
     now: () => clock.now,
   };
+  const target = Buffer.alloc(size);
 
   const net: Net = {
     sender: new FileSender(senderDeps, PEER, ID, 'shot.png', size),
-    receiver: new FileReceiver({ ...receiverDeps, write: (b) => receiverDeps.write(b) }, PEER, ID, 'shot.png', size),
-    written: Buffer.alloc(0),
+    receiver: new FileReceiver(receiverDeps, PEER, ID, 'shot.png', size),
+    written,
     ends,
     progress,
     clock,
     source,
     run: async () => {
+      let quiet = 0;
       for (let round = 0; round < 400; round++) {
         const forward = toReceiver.splice(0);
         const back = toSender.splice(0);
@@ -85,9 +89,11 @@ function pair(size: number, autoAccept = true): Net {
         }
         for (const m of back) net.sender.onMessage(m);
         await settle();
-        if (forward.length === 0 && back.length === 0 && toReceiver.length === 0 && toSender.length === 0) break;
+        // Two quiet rounds: a resend started by `tick` lands on the queue a moment later, not within this round.
+        const empty = forward.length === 0 && back.length === 0 && toReceiver.length === 0 && toSender.length === 0;
+        quiet = empty ? quiet + 1 : 0;
+        if (quiet >= 2) break;
       }
-      net.written = Buffer.concat(written);
     },
   };
   return net;
@@ -112,7 +118,7 @@ describe('FileSender and FileReceiver', () => {
     net.sender.offer();
     await net.run();
     expect(net.ends.receiver).toEqual({ ok: true });
-    expect(net.written.length).toBe(size);
+    expect(net.receiver.done).toBe(net.receiver.total);
     expect(net.written.equals(net.source)).toBe(true);
   });
 
@@ -122,7 +128,7 @@ describe('FileSender and FileReceiver', () => {
     net.receiver.answer(false);
     await net.run();
     expect(net.ends.sender).toEqual({ ok: false, why: 'refused' });
-    expect(net.written.length).toBe(0);
+    expect(net.receiver.done).toBe(0);
   });
 
   it('repeats a part that never arrived, then finishes', async () => {
@@ -148,12 +154,39 @@ describe('FileSender and FileReceiver', () => {
     expect(net.written.equals(net.source)).toBe(true);
   });
 
-  it('drops a part that arrives out of order instead of writing it in the wrong place', async () => {
+  it('writes a late part where it belongs, and counts it at once', async () => {
+    // A busy LAN hands packets over out of order. The old receiver dropped anything that was not next, so one lost
+    // packet stalled everything behind it; 163 MB never finished that way.
     const net = pair(3000, false);
     net.receiver.onMessage({ t: 'part', peer: PEER, seq: 1, ts: 0, id: ID, i: 1, b: 'AAAA' } as unknown as FileMsg);
     await settle();
-    expect(net.written.length).toBe(0); // nothing written: part 0 is still missing
-    expect(net.progress.some((p) => p.direction === 'receive')).toBe(false);
+    expect(net.receiver.done).toBe(1); // written, but the run from the start is still missing part 0
+    expect(net.written.subarray(PART_BYTES, PART_BYTES + 3)).toEqual(Buffer.from('AAAA', 'base64'));
+    expect(net.written.subarray(0, 3)).toEqual(Buffer.alloc(3)); // part 0 has not overwritten anything
+  });
+
+  it('costs one retransmission for a gap, not the whole window behind it', async () => {
+    const net = pair(PART_BYTES * 80);
+    net.sender.offer();
+    // Lose the second part, then let everything after it through: only that one part should need repeating.
+    let dropped = false;
+    const realOnMessage = net.receiver.onMessage.bind(net.receiver);
+    net.receiver.onMessage = (m: FileMsg): void => {
+      if (!dropped && m.t === 'part' && m.i === 1) {
+        dropped = true;
+        return;
+      }
+      realOnMessage(m);
+    };
+    await net.run();
+    expect(net.receiver.done).toBeGreaterThan(1); // the parts behind the gap still landed
+    // The sender's own timer is what repeats the one part that went missing.
+    net.clock.now += 2000;
+    net.sender.tick(net.clock.now);
+    await net.run();
+    expect(net.ends.receiver).toEqual({ ok: true });
+    expect(net.written.equals(net.source)).toBe(true);
+    expect(net.receiver.done).toBe(net.receiver.total);
   });
 
   it('gives up on a member that stops answering', async () => {

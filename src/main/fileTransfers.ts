@@ -48,6 +48,7 @@ export class FileSender {
   private sealed = false;
   private finished = false;
   private pumping = false;
+  private pumpAgain = false;
   private lastHeard: number;
 
   constructor(
@@ -123,14 +124,25 @@ export class FileSender {
   }
 
   private async pump(): Promise<void> {
-    if (this.pumping || this.finished || this.acceptedAt === null) return;
+    // An acknowledgement that lands while the loop below is awaiting must not be lost: it asks for one more pass
+    // instead of returning, or the window would stop moving and the transfer would sit there until the idle timer.
+    if (this.pumping) {
+      this.pumpAgain = true;
+      return;
+    }
+    if (this.finished || this.acceptedAt === null) return;
     this.pumping = true;
     try {
-      while (!this.finished && this.next < this.total && this.next < this.acked + WINDOW_PARTS) {
-        await this.sendPart(this.next);
-        this.next++;
-      }
-      if (!this.finished && this.next >= this.total && this.inFlight.size === 0 && !this.sealed) await this.seal();
+      do {
+        this.pumpAgain = false;
+        while (!this.finished && this.next < this.total && this.next < this.acked + WINDOW_PARTS) {
+          await this.sendPart(this.next);
+          this.next++;
+        }
+        // Sealed once the receiver has acknowledged every part. Waiting for an empty window instead would never
+        // happen when a part is acknowledged out of step, and the receiver would wait for a seal that never comes.
+        if (!this.finished && this.acked >= this.total && !this.sealed) await this.seal();
+      } while (this.pumpAgain && !this.finished);
     } finally {
       this.pumping = false;
     }
@@ -166,8 +178,8 @@ export class FileSender {
 }
 
 export interface ReceiverDeps {
-  /** Writes the next part, in order; false when the disk refused. */
-  write(bytes: Uint8Array): Promise<boolean>;
+  /** Writes one part at its own place in the file; false when the disk refused. Parts may arrive in any order. */
+  write(bytes: Uint8Array, offset: number): Promise<boolean>;
   /** sha256 of everything written so far. */
   sha256(): Promise<string>;
   /** Closes the file and moves it into place; false when it could not be finished. */
@@ -184,12 +196,21 @@ export interface ReceiverDeps {
 const ACK_EVERY = 16;
 
 /**
- * One file arriving from one member. Parts must arrive in order — the sender repeats whatever is missing — and every
- * part is written as it lands, so a 200 MB file never sits in memory.
+ * One file arriving from one member. Parts may arrive in any order: each is written at its own place in the file, so a
+ * lost packet costs one retransmission instead of stalling everything behind the gap (which is what made a large file
+ * give up: one gap in every 32-part window, waiting a second and a half for each). `next` is the run from the start
+ * that is complete, which is what the sender needs to hear; every part is written as it lands, so a 200 MB file never
+ * sits in memory.
  */
 export class FileReceiver {
+  /** The first part that is still missing: everything below it is written. */
   private next = 0;
-  private sinceAck = 0;
+  /** Parts written after `next`, waiting for the gap to fill; and parts being written right now. */
+  private readonly beyond = new Set<number>();
+  private readonly writing = new Set<number>();
+  private written = 0;
+  /** `next` as it stood at the last acknowledgement: the run from the start is what the sender waits to hear about. */
+  private ackedNext = 0;
   private sealedSha: string | null = null;
   private finished = false;
   private lastPart: number;
@@ -210,7 +231,7 @@ export class FileReceiver {
 
   /** Parts written so far: what a progress bar for a file coming in counts. */
   get done(): number {
-    return this.next;
+    return this.written;
   }
 
   /** The answer to the offer, sent before any part can arrive. */
@@ -224,13 +245,12 @@ export class FileReceiver {
     if (msg.t === 'abort' && msg.id === this.id) return this.finish({ ok: false, why: 'cancelled' });
     if (msg.id !== this.id || this.finished) return;
     if (msg.t === 'part') {
-      // Out of order means a part went missing: drop it and let the sender repeat from the gap. The counter moves
-      // before the write is awaited, so two parts that arrive together are not mistaken for one out of order.
-      if (msg.i !== this.next) return;
-      this.next++;
-      this.sinceAck++;
+      if (msg.i >= this.total) return;
+      // A repeat of something already in hand needs no work, and a part already being written no second write.
+      if (msg.i < this.next || this.beyond.has(msg.i) || this.writing.has(msg.i)) return;
+      this.writing.add(msg.i);
       this.lastPart = this.deps.now();
-      void this.take(msg.b);
+      void this.take(msg.i, msg.b);
       return;
     }
     if (msg.t === 'seal') {
@@ -253,15 +273,26 @@ export class FileReceiver {
     this.finish({ ok: false, why: 'cancelled' });
   }
 
-  private async take(base64: string): Promise<void> {
+  private async take(index: number, base64: string): Promise<void> {
     const bytes = Buffer.from(base64, 'base64');
-    const ok = await this.deps.write(bytes);
+    const ok = await this.deps.write(bytes, index * PART_BYTES);
+    this.writing.delete(index);
     if (this.finished) return;
     if (!ok) {
       this.deps.send(this.peer, { t: 'abort', id: this.id });
       return this.finish({ ok: false, why: 'failed' });
     }
-    if (this.sinceAck >= ACK_EVERY || this.next >= this.total) this.ack();
+    this.written++;
+    if (index === this.next) {
+      // The gap is filled: take every part behind it that already landed.
+      this.next++;
+      while (this.beyond.delete(this.next)) this.next++;
+    } else {
+      this.beyond.add(index);
+    }
+    // Acknowledged on how far the run from the start has moved, not on how many parts have been written: filling one
+    // gap can move `next` by dozens of parts at once, and the sender is waiting to hear about exactly that.
+    if (this.next - this.ackedNext >= ACK_EVERY || this.next >= this.total) this.ack();
     else this.report();
   }
 
@@ -275,7 +306,7 @@ export class FileReceiver {
   }
 
   private ack(): void {
-    this.sinceAck = 0;
+    this.ackedNext = this.next;
     this.deps.send(this.peer, { t: 'ack', to: this.peer, id: this.id, next: this.next });
     this.report();
   }
